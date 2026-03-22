@@ -1,0 +1,50 @@
+#!/usr/bin/env bats
+# ============================================================================
+# restore.bats — Unit tests for lib/restore.sh
+# ============================================================================
+
+load test_helper
+
+setup() {
+  setup_test_environment
+  load_module "validation.sh"
+  load_module "restore.sh"
+}
+
+teardown() {
+  teardown_test_environment
+}
+
+# --- generate_restore_temp_db_name ------------------------------------------
+
+@test "generate_restore_temp_db_name respects PostgreSQL identifier length" {
+  export DB_NAME="$(printf 'a%.0s' $(seq 1 63))"
+  local result
+  result="$(generate_restore_temp_db_name "staging")"
+  (( ${#result} <= 63 ))
+}
+
+# --- restore_with_refresh_strategy ------------------------------------------
+
+@test "restore_with_refresh_strategy restores staging DB before replacing target" {
+  local calls_file="$TEST_TMP/restore_calls.txt"
+
+  generate_restore_temp_db_name() { printf 'test_db_staging'; }
+  drop_database_named_if_exists() { printf 'drop:%s\n' "$1" >>"$calls_file"; }
+  drop_database_if_exists() { printf 'drop:%s\n' "$DB_NAME" >>"$calls_file"; }
+  create_database_named_if_missing() { printf 'create:%s:%s\n' "$1" "$2" >>"$calls_file"; }
+  rollback_register() { printf 'rollback:%s\n' "$1" >>"$calls_file"; }
+  restore_payload_into_database() { printf 'restore:%s:%s\n' "$3" "$2" >>"$calls_file"; }
+  db_exists() { printf 'exists:%s\n' "$DB_NAME" >>"$calls_file"; return 0; }
+  rename_database() { printf 'rename:%s:%s\n' "$1" "$2" >>"$calls_file"; }
+
+  restore_with_refresh_strategy "plain" "$ROOT/dump.sql"
+
+  [ "$(sed -n '1p' "$calls_file")" = "drop:test_db_staging" ]
+  [ "$(sed -n '2p' "$calls_file")" = "create:test_db_staging:test_user" ]
+  [ "$(sed -n '3p' "$calls_file")" = "rollback:drop temporary restore database test_db_staging" ]
+  [ "$(sed -n '4p' "$calls_file")" = "restore:test_db_staging:$ROOT/dump.sql" ]
+  [ "$(sed -n '5p' "$calls_file")" = "exists:test_db" ]
+  [ "$(sed -n '6p' "$calls_file")" = "drop:test_db" ]
+  [ "$(sed -n '7p' "$calls_file")" = "rename:test_db_staging:test_db" ]
+}

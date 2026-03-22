@@ -1,0 +1,11 @@
+# ShellCheck configuration for setup_odoo scripts
+# See: https://www.shellcheck.net/wiki/
+
+# Allow sourcing files by variable name (lib modules)
+disable=SC1090
+
+# Allow sourcing from paths determined at runtime
+disable=SC1091
+
+# Default shell dialect
+shell=bash

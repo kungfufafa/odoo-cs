@@ -1,0 +1,110 @@
+name: CI — Setup Odoo Scripts
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'setup_odoo.sh'
+      - 'setup_odoo.ps1'
+      - 'lib/**'
+      - 'tests/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'setup_odoo.sh'
+      - 'setup_odoo.ps1'
+      - 'lib/**'
+      - 'tests/**'
+
+jobs:
+  # ===========================================================================
+  # Lint: ShellCheck for bash, PSScriptAnalyzer for PowerShell
+  # ===========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: ShellCheck — setup_odoo.sh
+        run: shellcheck -x -S warning setup_odoo.sh
+
+      - name: ShellCheck — lib/*.sh
+        run: shellcheck -x -S warning lib/*.sh
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: PSScriptAnalyzer — setup_odoo.ps1
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path setup_odoo.ps1 -Severity Warning,Error
+          if ($results) {
+            $results | Format-Table -AutoSize
+            exit 1
+          }
+
+  # ===========================================================================
+  # Test: BATS unit & integration tests on Linux and macOS
+  # ===========================================================================
+  test-bash:
+    name: Test (Bash) — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BATS
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update && sudo apt-get install -y bats
+          else
+            brew install bats-core
+          fi
+
+      - name: Run BATS tests
+        run: |
+          chmod +x tests/run_tests.sh
+          ./tests/run_tests.sh
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bats-results-${{ matrix.os }}
+          path: tests/results/
+          retention-days: 7
+
+  # ===========================================================================
+  # Test: Pester tests on Windows
+  # ===========================================================================
+  test-powershell:
+    name: Test (PowerShell)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module -Name Pester -Force -Scope CurrentUser -MinimumVersion 5.0
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          if (Test-Path tests/pester) {
+            $config = New-PesterConfiguration
+            $config.Run.Path = 'tests/pester'
+            $config.Output.Verbosity = 'Detailed'
+            $config.TestResult.Enabled = $true
+            $config.TestResult.OutputPath = 'tests/results/pester-results.xml'
+            Invoke-Pester -Configuration $config
+          } else {
+            Write-Host 'No Pester tests found — skipping'
+          }
