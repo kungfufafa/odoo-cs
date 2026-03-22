@@ -99,8 +99,8 @@ teardown() {
 @test "write_odoo_conf sets chmod 600" {
   write_odoo_conf
   local perms
-  perms="$(stat -f '%Lp' "$ROOT/odoo.conf" 2>/dev/null || stat -c '%a' "$ROOT/odoo.conf")"
-  [ "$perms" = "600" ]
+  perms="$(stat -c '%a' "$ROOT/odoo.conf" 2>/dev/null || stat -f '%Lp' "$ROOT/odoo.conf")"
+  [[ "$perms" =~ ^0?600$ ]]
 }
 
 @test "write_odoo_conf includes ODOO_SRC_DIR in addons_path" {

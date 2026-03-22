@@ -1,8 +1,7 @@
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$libPath = Join-Path (Split-Path -Parent $here) '..\lib\service.ps1'
-
 BeforeAll {
-    . $libPath
+    $libDir = Join-Path $PSScriptRoot '..' '..' 'lib'
+    . (Join-Path $libDir 'logging.ps1')
+    . (Join-Path $libDir 'service.ps1')
 }
 
 Describe 'Service Module' {

@@ -178,8 +178,8 @@ detect_custom_addons() {
 
   # Try to find and extract a custom addons zip using configurable patterns
   local IFS='|'
-  local patterns_array=($CUSTOM_ADDONS_ZIP_PATTERNS)
-  unset IFS
+  local patterns_array
+  read -ra patterns_array <<< "$CUSTOM_ADDONS_ZIP_PATTERNS"
 
   for pattern in "${patterns_array[@]}"; do
     candidate="$(find "$ROOT" -maxdepth 1 -type f -name "$pattern" | sort | head -n 1 || true)"
@@ -261,7 +261,7 @@ install_deb_package() {
   require_cmd apt-get
   log_info "installing Odoo .deb package: $ODOO_DEB_PACKAGE"
   run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y "$ODOO_DEB_PACKAGE"
-  ODOO_BIN="/usr/bin/odoo"
+  export ODOO_BIN="/usr/bin/odoo"
 }
 
 # Install Odoo from .exe package (Windows only, via PowerShell).

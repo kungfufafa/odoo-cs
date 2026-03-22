@@ -1,10 +1,8 @@
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$libPath = Join-Path (Split-Path -Parent $here) '..\lib\database.ps1'
-$platformLibPath = Join-Path (Split-Path -Parent $here) '..\lib\platform.ps1'
-
 BeforeAll {
-    . $platformLibPath
-    . $libPath
+    $libDir = Join-Path $PSScriptRoot '..' '..' 'lib'
+    . (Join-Path $libDir 'logging.ps1')
+    . (Join-Path $libDir 'platform.ps1')
+    . (Join-Path $libDir 'database.ps1')
 }
 
 Describe 'Database Module' {

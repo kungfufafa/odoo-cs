@@ -47,8 +47,8 @@ teardown() {
 @test "write_secrets_file sets chmod 600" {
   write_secrets_file
   local perms
-  perms="$(stat -f '%Lp' "$SECRETS_ENV_FILE" 2>/dev/null || stat -c '%a' "$SECRETS_ENV_FILE")"
-  [ "$perms" = "600" ]
+  perms="$(stat -c '%a' "$SECRETS_ENV_FILE" 2>/dev/null || stat -f '%Lp' "$SECRETS_ENV_FILE")"
+  [[ "$perms" =~ ^0?600$ ]]
 }
 
 @test "write_secrets_file contains DB_PASSWORD" {

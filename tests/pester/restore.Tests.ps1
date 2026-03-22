@@ -1,22 +1,20 @@
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$libPath = Join-Path (Split-Path -Parent $here) '..\lib\restore.ps1'
-$platformLibPath = Join-Path (Split-Path -Parent $here) '..\lib\platform.ps1'
-
 BeforeAll {
-    . $platformLibPath
-    . $libPath
+    $libDir = Join-Path $PSScriptRoot '..' '..' 'lib'
+    . (Join-Path $libDir 'logging.ps1')
+    . (Join-Path $libDir 'platform.ps1')
+    . (Join-Path $libDir 'restore.ps1')
 }
 
 Describe 'Restore Module' {
     Context 'Resolve-BackupDir' {
         BeforeEach {
-            $tempDir = Join-Path $here 'tmp_restore'
+            $tempDir = Join-Path $PSScriptRoot 'tmp_restore'
             New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
             $script:RestoreWorkDir = Join-Path $tempDir '.restore'
         }
 
         AfterEach {
-            $tempDir = Join-Path $here 'tmp_restore'
+            $tempDir = Join-Path $PSScriptRoot 'tmp_restore'
             if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
         }
 

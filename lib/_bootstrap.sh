@@ -19,7 +19,7 @@ LIB_DIR="${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 # Read version from VERSION file.
 if [[ -f "$LIB_DIR/../VERSION" ]]; then
-  SETUP_ODOO_VERSION="$(cat "$LIB_DIR/../VERSION" | tr -d '[:space:]')"
+  SETUP_ODOO_VERSION="$(tr -d '[:space:]' < "$LIB_DIR/../VERSION")"
 else
   SETUP_ODOO_VERSION="dev"
 fi

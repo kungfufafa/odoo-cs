@@ -1,10 +1,7 @@
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$libPath = Join-Path (Split-Path -Parent $here) '..\lib\validation.ps1'
-$logLibPath = Join-Path (Split-Path -Parent $here) '..\lib\logging.ps1'
-
 BeforeAll {
-    . $logLibPath
-    . $libPath
+    $libDir = Join-Path $PSScriptRoot '..' '..' 'lib'
+    . (Join-Path $libDir 'logging.ps1')
+    . (Join-Path $libDir 'validation.ps1')
 }
 
 Describe 'Validation Module' {
@@ -45,11 +42,12 @@ Describe 'Validation Module' {
     }
 
     Context 'Test-ValidEnum' {
-        $allowed = @('apple', 'banana', 'orange')
         It 'accepts valid enum' {
+            $allowed = @('apple', 'banana', 'orange')
             Test-ValidEnum 'FRUIT' 'apple' $allowed | Should -Be $true
         }
         It 'rejects invalid enum' {
+            $allowed = @('apple', 'banana', 'orange')
             Test-ValidEnum 'FRUIT' 'grape' $allowed | Should -Be $false
         }
     }

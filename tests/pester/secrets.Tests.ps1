@@ -1,17 +1,13 @@
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$libPath = Join-Path (Split-Path -Parent $here) '..\lib\secrets.ps1'
-$logLibPath = Join-Path (Split-Path -Parent $here) '..\lib\logging.ps1'
-$platformLibPath = Join-Path (Split-Path -Parent $here) '..\lib\platform.ps1'
-
 BeforeAll {
-    . $logLibPath
-    . $platformLibPath
-    . $libPath
+    $libDir = Join-Path $PSScriptRoot '..' '..' 'lib'
+    . (Join-Path $libDir 'logging.ps1')
+    . (Join-Path $libDir 'platform.ps1')
+    . (Join-Path $libDir 'secrets.ps1')
 }
 
 Describe 'Secrets Module' {
     BeforeEach {
-        $tempDir = Join-Path $here 'tmp_secrets'
+        $tempDir = Join-Path $PSScriptRoot 'tmp_secrets'
         New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
         $script:SecretsFile = Join-Path $tempDir '.odoo.secrets.ps1'
         $script:DbPassword = ''
@@ -19,7 +15,7 @@ Describe 'Secrets Module' {
     }
 
     AfterEach {
-        $tempDir = Join-Path $here 'tmp_secrets'
+        $tempDir = Join-Path $PSScriptRoot 'tmp_secrets'
         if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
     }
 

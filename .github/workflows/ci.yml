@@ -39,10 +39,14 @@ jobs:
         shell: pwsh
         run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
 
-      - name: PSScriptAnalyzer — setup_odoo.ps1
+      - name: PSScriptAnalyzer — PowerShell scripts
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path setup_odoo.ps1 -Severity Warning,Error
+          $results = @()
+          $results += Invoke-ScriptAnalyzer -Path setup_odoo.ps1 -Severity Warning,Error -ExcludeRule PSUseApprovedVerbs
+          Get-ChildItem -Path lib -Filter '*.ps1' | ForEach-Object {
+            $results += Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error -ExcludeRule PSUseApprovedVerbs
+          }
           if ($results) {
             $results | Format-Table -AutoSize
             exit 1

@@ -1,10 +1,8 @@
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$libPath = Join-Path (Split-Path -Parent $here) '..\lib\config.ps1'
-$platformLibPath = Join-Path (Split-Path -Parent $here) '..\lib\platform.ps1'
-
 BeforeAll {
-    . $platformLibPath
-    . $libPath
+    $libDir = Join-Path $PSScriptRoot '..' '..' 'lib'
+    . (Join-Path $libDir 'logging.ps1')
+    . (Join-Path $libDir 'platform.ps1')
+    . (Join-Path $libDir 'config.ps1')
 }
 
 Describe 'Config Module' {
@@ -56,7 +54,7 @@ Describe 'Config Module' {
 
     Context 'Write-OdooConfig' {
         BeforeEach {
-            $tempDir = Join-Path $here 'tmp_config'
+            $tempDir = Join-Path $PSScriptRoot 'tmp_config'
             New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
             $script:ConfigFile = Join-Path $tempDir 'odoo.conf'
             $script:OdooAdminPasswd = 'admin'
@@ -85,7 +83,7 @@ Describe 'Config Module' {
         }
 
         AfterEach {
-            $tempDir = Join-Path $here 'tmp_config'
+            $tempDir = Join-Path $PSScriptRoot 'tmp_config'
             if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
         }
 
