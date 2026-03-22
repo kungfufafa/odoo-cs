@@ -1,5 +1,10 @@
 # Ignore build artifacts
 .artifacts/
+.downloads/
+.logs/
+.venv-drive-fetch/
+.logs/drive-folder-download.log
+.run/drive-folder-download.pid
 falinwasales-majukendaraanlistrikindonesia-main-8015129_2026-03-15_120504_exact_nofs.zip
 majukendaraanlistrikindonesia-main.zip
 odoo_16.0+e.20260318.tar.gz
