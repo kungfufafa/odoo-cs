@@ -102,14 +102,14 @@ function Sync-Filestore {
 function Restore-Database {
     if ($RestoreMode -eq 'skip') { Write-Log 'skipping restore because RESTORE_MODE=skip'; return }
 
-    $input = Get-BackupInput
-    if (-not $input) {
+    $backupInput = Get-BackupInput
+    if (-not $backupInput) {
         if ($RestoreMode -eq 'auto') { Write-Log 'no backup detected; skipping restore'; return }
         throw 'unable to auto-detect backup input'
     }
 
-    $script:BackupInput = $input
-    $backupDir = Resolve-BackupDir -InputPath $input
+    $script:BackupInput = $backupInput
+    $backupDir = Resolve-BackupDir -InputPath $backupInput
     $payload = Get-RestorePayload -BackupDir $backupDir
     if (-not $payload) { throw "no supported dump payload found under $backupDir" }
 

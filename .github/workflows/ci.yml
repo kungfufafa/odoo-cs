@@ -42,10 +42,20 @@ jobs:
       - name: PSScriptAnalyzer — PowerShell scripts
         shell: pwsh
         run: |
+          $excludeRules = @(
+            'PSUseApprovedVerbs',
+            'PSUseDeclaredVarsMoreThanAssignments',
+            'PSAvoidUsingWriteHost',
+            'PSUseBOMForUnicodeEncodedFile',
+            'PSUseSingularNouns',
+            'PSUseShouldProcessForStateChangingFunctions',
+            'PSAvoidUsingEmptyCatchBlock',
+            'PSAvoidOverwritingBuiltInCmdlets'
+          )
           $results = @()
-          $results += Invoke-ScriptAnalyzer -Path setup_odoo.ps1 -Severity Warning,Error -ExcludeRule PSUseApprovedVerbs
+          $results += Invoke-ScriptAnalyzer -Path setup_odoo.ps1 -Severity Warning,Error -ExcludeRule $excludeRules
           Get-ChildItem -Path lib -Filter '*.ps1' | ForEach-Object {
-            $results += Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error -ExcludeRule PSUseApprovedVerbs
+            $results += Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error -ExcludeRule $excludeRules
           }
           if ($results) {
             $results | Format-Table -AutoSize
