@@ -187,13 +187,12 @@ detect_custom_addons() {
   done
 
   if [[ -n "${candidate:-}" ]]; then
-    require_cmd unzip
     extract_dir="$ARTIFACTS_DIR/$(basename "${candidate%.zip}")"
     if [[ ! -f "$extract_dir/.extracted.ok" ]]; then
       rm -rf "$extract_dir"
       mkdir -p "$extract_dir"
       log_info "extracting custom addons zip to $extract_dir"
-      unzip -oq "$candidate" -d "$extract_dir"
+      extract_zip_archive "$candidate" "$extract_dir"
       touch "$extract_dir/.extracted.ok"
     fi
 
@@ -215,11 +214,10 @@ install_linux_packages_if_needed() {
   [[ "$INSTALL_MODE" == "source" || "$INSTALL_MODE" == "deb" ]] || return 0
 
   if [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]]; then
-    require_cmd sudo
     require_cmd apt-get
     log_info "installing system packages for $LINUX_DISTRO"
-    sudo apt-get update
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
+    run_privileged apt-get update
+    run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
   else
     log_info "skipping auto package install on non-Ubuntu Linux"
   fi
@@ -260,10 +258,9 @@ install_deb_package() {
 
   _verify_package_checksum "$ODOO_DEB_PACKAGE"
 
-  require_cmd sudo
   require_cmd apt-get
   log_info "installing Odoo .deb package: $ODOO_DEB_PACKAGE"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$ODOO_DEB_PACKAGE"
+  run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y "$ODOO_DEB_PACKAGE"
   ODOO_BIN="/usr/bin/odoo"
 }
 

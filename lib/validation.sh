@@ -178,6 +178,12 @@ validate_all_inputs() {
   validate_positive_int "ODOO_LIMIT_TIME_CPU" "$ODOO_LIMIT_TIME_CPU" || (( errors++ ))
   validate_positive_int "ODOO_LIMIT_TIME_REAL" "$ODOO_LIMIT_TIME_REAL" || (( errors++ ))
 
+  # Explicitly reject unsupported preview mode to avoid false safety assumptions
+  if [[ "${DRY_RUN:-0}" != "0" ]]; then
+    log_error "DRY_RUN is no longer supported; remove it and retry"
+    (( errors++ ))
+  fi
+
   # Non-negative integer validations
   validate_non_negative_int "ODOO_MAX_CRON_THREADS" "$ODOO_MAX_CRON_THREADS" || (( errors++ ))
   validate_non_negative_int "ODOO_DB_MAXCONN" "$ODOO_DB_MAXCONN" || (( errors++ ))

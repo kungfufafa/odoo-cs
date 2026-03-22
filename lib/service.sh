@@ -12,6 +12,15 @@ _SERVICE_SH_LOADED=1
 # Timeout (seconds) before SIGKILL after sending SIGTERM.
 STOP_TIMEOUT="${STOP_TIMEOUT:-30}"
 
+# Detached bootstrap on Ubuntu/Debian cannot answer sudo password prompts.
+# Fail early unless the shell is already root or sudo is non-interactive.
+ensure_background_privilege_escalation() {
+  detect_platform
+  [[ "$OS_FAMILY" == "linux" ]] || return 0
+  [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]] || return 0
+  require_noninteractive_sudo_for_background
+}
+
 # Read the PID value from a PID file.
 # Arguments: $1=PID file path
 # Output: PID value on stdout (empty if file doesn't exist)
@@ -78,12 +87,44 @@ start_odoo_detached() {
   log_info "stdout log=$ODOO_STDOUT_LOG"
 }
 
+# Resolve the HTTP host to use for local healthchecks.
+# Wildcard binds are translated back to a reachable loopback address.
+resolved_healthcheck_host() {
+  local host="${ODOO_HTTP_INTERFACE:-127.0.0.1}"
+  host="${host#[}"
+  host="${host%]}"
+
+  case "$host" in
+    ""|0.0.0.0)
+      printf '127.0.0.1\n'
+      ;;
+    ::)
+      printf '::1\n'
+      ;;
+    *)
+      printf '%s\n' "$host"
+      ;;
+  esac
+}
+
+# Build the login URL used by the Odoo healthcheck.
+healthcheck_url() {
+  local host
+  host="$(resolved_healthcheck_host)"
+
+  if [[ "$host" == *:* ]]; then
+    printf 'http://[%s]:%s/web/login\n' "$host" "$ODOO_HTTP_PORT"
+  else
+    printf 'http://%s:%s/web/login\n' "$host" "$ODOO_HTTP_PORT"
+  fi
+}
+
 # Wait for Odoo to become healthy by polling the login page.
 # Also checks DB connectivity if psql is available.
 # Dies if healthcheck fails after HEALTHCHECK_TIMEOUT seconds.
 healthcheck_odoo() {
   local deadline url
-  url="http://127.0.0.1:${ODOO_HTTP_PORT}/web/login"
+  url="$(healthcheck_url)"
   deadline=$((SECONDS + HEALTHCHECK_TIMEOUT))
 
   log_info "waiting for Odoo healthcheck at $url (timeout: ${HEALTHCHECK_TIMEOUT}s)"
@@ -134,6 +175,7 @@ stop_pid_file() {
 start_background() {
   local pid
   ensure_dirs
+  ensure_background_privilege_escalation
   pid="$(read_pid_file "$BOOTSTRAP_PID_FILE")"
   if pid_is_running "$pid"; then
     log_info "bootstrap already running with pid $pid"

@@ -19,6 +19,84 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || log_fatal "required command not found: $1"
 }
 
+# Return success when the current shell runs as root.
+is_root_user() {
+  [[ "$(id -u)" == "0" ]]
+}
+
+# Run a command with root privileges.
+# Uses sudo only when the current shell is not already root.
+run_privileged() {
+  if is_root_user; then
+    "$@"
+  else
+    require_cmd sudo
+    sudo "$@"
+  fi
+}
+
+# Fail fast when detached bootstrap would require an interactive sudo prompt.
+require_noninteractive_sudo_for_background() {
+  if is_root_user; then
+    return 0
+  fi
+
+  require_cmd sudo
+  sudo -n true >/dev/null 2>&1 || log_fatal "background bootstrap cannot prompt for sudo password — run as root, configure passwordless sudo, or use './setup_odoo.sh bootstrap' in an interactive shell"
+}
+
+# List archive entries from a zip file.
+# Prefers unzip for speed, but falls back to python3 when unavailable.
+# Arguments: $1=zip archive path
+zip_list_entries() {
+  local archive="$1"
+
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -Z1 "$archive"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$archive" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    for name in archive.namelist():
+        print(name)
+PY
+    return 0
+  fi
+
+  log_fatal "required command not found: unzip or python3"
+}
+
+# Extract a zip archive into the target directory.
+# Prefers unzip for speed, but falls back to python3 when unavailable.
+# Arguments: $1=zip archive path, $2=destination directory
+extract_zip_archive() {
+  local archive="$1"
+  local destination="$2"
+
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -oq "$archive" -d "$destination"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$archive" "$destination" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    archive.extractall(sys.argv[2])
+PY
+    return 0
+  fi
+
+  log_fatal "required command not found: unzip or python3"
+}
+
 # Detect operating system family and Linux distro.
 # Sets globals: OS_FAMILY (linux|macos|windows), LINUX_DISTRO (ubuntu|debian|...)
 detect_platform() {

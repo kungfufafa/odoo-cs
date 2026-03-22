@@ -10,6 +10,24 @@
 [[ -n "${_RESTORE_SH_LOADED:-}" ]] && return 0
 _RESTORE_SH_LOADED=1
 
+# Find user-provided files while excluding workspace-managed directories.
+# Arguments: $1=maxdepth, remaining args=additional find predicates
+_find_user_workspace_files() {
+  local maxdepth="$1"
+  shift
+
+  find "$ROOT" -maxdepth "$maxdepth" \
+    \( -path "$RESTORE_WORKDIR" -o -path "$RESTORE_WORKDIR/*" \
+       -o -path "$ARTIFACTS_DIR" -o -path "$ARTIFACTS_DIR/*" \
+       -o -path "$ROOT/.logs" -o -path "$ROOT/.logs/*" \
+       -o -path "$ROOT/.run" -o -path "$ROOT/.run/*" \
+       -o -path "$ROOT/.rollback" -o -path "$ROOT/.rollback/*" \
+       -o -path "$ROOT/.local" -o -path "$ROOT/.local/*" \
+       -o -path "$ROOT/.venv" -o -path "$ROOT/.venv/*" \
+       -o -path "$ROOT/.git" -o -path "$ROOT/.git/*" \) -prune -o \
+    -type f "$@" -print
+}
+
 # Detect backup input automatically by searching for dump files and archives.
 # Output: backup input path on stdout
 # Returns: 0 if found, 1 if not found
@@ -21,7 +39,7 @@ detect_backup_input() {
   }
 
   # Look for dump.sql in subdirectories
-  candidate="$(find "$ROOT" -maxdepth 3 -type f -name 'dump.sql' | sort | head -n 1 || true)"
+  candidate="$(_find_user_workspace_files 3 -name 'dump.sql' | sort | head -n 1 || true)"
   [[ -n "$candidate" ]] && {
     printf '%s\n' "$(dirname "$candidate")"
     return 0
@@ -29,14 +47,14 @@ detect_backup_input() {
 
   # Look for zip files containing dumps
   while IFS= read -r zip_candidate; do
-    if unzip -Z1 "$zip_candidate" 2>/dev/null | grep -Eq '(^|/)dump\.sql$|(^|/).+\.(dump|backup)$'; then
+    if zip_list_entries "$zip_candidate" 2>/dev/null | grep -Eq '(^|/)dump\.sql$|(^|/).+\.(dump|backup)$'; then
       printf '%s\n' "$zip_candidate"
       return 0
     fi
-  done < <(find "$ROOT" -maxdepth 2 -type f -name '*.zip' | sort)
+  done < <(_find_user_workspace_files 2 -name '*.zip' | sort)
 
   # Look for standalone dump files
-  candidate="$(find "$ROOT" -maxdepth 2 -type f \( -name '*.dump' -o -name '*.backup' -o -name '*.sql' \) | sort | head -n 1 || true)"
+  candidate="$(_find_user_workspace_files 2 \( -name '*.dump' -o -name '*.backup' -o -name '*.sql' \) | sort | head -n 1 || true)"
   [[ -n "$candidate" ]] && {
     printf '%s\n' "$candidate"
     return 0
@@ -60,13 +78,12 @@ resolve_backup_dir() {
 
   case "$input" in
     *.zip)
-      require_cmd unzip
       extract_dir="$RESTORE_WORKDIR/$(basename "${input%.zip}")"
       if [[ ! -f "$extract_dir/.extracted.ok" ]]; then
         rm -rf "$extract_dir"
         mkdir -p "$extract_dir"
         log_info "extracting backup zip to $extract_dir"
-        unzip -oq "$input" -d "$extract_dir"
+        extract_zip_archive "$input" "$extract_dir"
         touch "$extract_dir/.extracted.ok"
       fi
       printf '%s\n' "$extract_dir"

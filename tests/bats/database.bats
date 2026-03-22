@@ -102,6 +102,17 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
+@test "should_use_sudo_for_db returns true for root without sudo" {
+  export PATH="$MOCK_BIN:$PATH"
+  create_mock "id" "0"
+  create_mock "runuser" ""
+  export DB_PROVISION_METHOD="auto"
+  export DB_ADMIN_USER="postgres"
+  export DB_HOST="127.0.0.1"
+  run should_use_sudo_for_db
+  [ "$status" -eq 0 ]
+}
+
 @test "should_use_sudo_for_db returns false for remote DB_HOST in auto mode" {
   export PATH="$MOCK_BIN:$PATH"
   create_mock "sudo" ""
@@ -123,6 +134,28 @@ teardown() {
   export DB_HOST="db.example.com"
   run run_admin_psql "SELECT 1;"
   [ "$status" -eq 0 ]
+}
+
+@test "run_admin_psql uses postgres OS user path when running as root" {
+  export PATH="$MOCK_BIN:$PATH"
+  create_mock "id" "0"
+  create_mock "psql" "1"
+  cat > "$MOCK_BIN/runuser" <<'EOF'
+#!/usr/bin/env bash
+shift 2
+if [[ "$1" == "--" ]]; then
+  shift
+fi
+exec "$@"
+EOF
+  chmod +x "$MOCK_BIN/runuser"
+  create_mock "sudo" "" 99
+  export DB_PROVISION_METHOD="auto"
+  export DB_ADMIN_USER="postgres"
+  export DB_HOST="127.0.0.1"
+  run run_admin_psql "SELECT 1;"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
 }
 
 # --- DB connection retry ---------------------------------------------------

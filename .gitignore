@@ -1,0 +1,7 @@
+# Ignore build artifacts
+.artifacts/
+falinwasales-majukendaraanlistrikindonesia-main-8015129_2026-03-15_120504_exact_nofs.zip
+majukendaraanlistrikindonesia-main.zip
+odoo_16.0+e.20260318.tar.gz
+odoo_16.0+e.20260322_all.deb
+odoo_setup_16.0e.20260321.exe

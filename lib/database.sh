@@ -46,8 +46,8 @@ db_host_is_local() {
   esac
 }
 
-# Determine whether to use sudo for PostgreSQL admin operations.
-# Returns 0 (true) if sudo should be used, 1 otherwise.
+# Determine whether to use the local postgres OS user path for admin operations.
+# Returns 0 (true) for local socket/peer access, 1 otherwise.
 should_use_sudo_for_db() {
   [[ "$DB_PROVISION_METHOD" == "sudo" ]] && return 0
   [[ "$DB_PROVISION_METHOD" != "auto" ]] && return 1
@@ -55,8 +55,33 @@ should_use_sudo_for_db() {
   [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]] || return 1
   [[ "$DB_ADMIN_USER" == "postgres" ]] || return 1
   db_host_is_local || return 1
+  if is_root_user; then
+    command -v runuser >/dev/null 2>&1 || command -v su >/dev/null 2>&1 || return 1
+    return 0
+  fi
   command -v sudo >/dev/null 2>&1 || return 1
   return 0
+}
+
+# Execute a command as the local postgres OS user.
+# Uses root-native user switching when already root, otherwise falls back to sudo.
+run_local_postgres_command() {
+  if is_root_user; then
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u postgres -- "$@"
+      return 0
+    fi
+    if command -v su >/dev/null 2>&1; then
+      local command_string
+      printf -v command_string '%q ' "$@"
+      su -s /bin/sh postgres -c "$command_string"
+      return 0
+    fi
+    log_fatal "required command not found: runuser or su"
+  fi
+
+  require_cmd sudo
+  sudo -u postgres "$@"
 }
 
 # Execute a SQL statement as the database admin user using psql.
@@ -69,9 +94,9 @@ run_admin_psql() {
 
   if should_use_sudo_for_db; then
     if [[ "${DB_HOST:-}" == /* ]]; then
-      sudo -u postgres psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -d postgres -Atqc "$sql"
+      run_local_postgres_command psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -d postgres -Atqc "$sql"
     else
-      sudo -u postgres psql -v ON_ERROR_STOP=1 -p "$DB_PORT" -d postgres -Atqc "$sql"
+      run_local_postgres_command psql -v ON_ERROR_STOP=1 -p "$DB_PORT" -d postgres -Atqc "$sql"
     fi
   else
     PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -v ON_ERROR_STOP=1 -Atqc "$sql"
@@ -231,9 +256,8 @@ END
 ensure_postgres_running() {
   [[ "$OS_FAMILY" == "linux" ]] || return 0
   if [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]]; then
-    require_cmd sudo
     log_info "starting PostgreSQL"
-    sudo systemctl enable postgresql >/dev/null 2>&1 || true
-    sudo systemctl restart postgresql
+    run_privileged systemctl enable postgresql >/dev/null 2>&1 || true
+    run_privileged systemctl restart postgresql
   fi
 }

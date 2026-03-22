@@ -352,6 +352,31 @@ function Get-FirstFile {
     return $null
 }
 
+function Get-WorkspaceFilesRecursive {
+    param(
+        [string]$Path,
+        [string]$Filter = '*',
+        [int]$MaxDepth = [int]::MaxValue,
+        [int]$Depth = 0
+    )
+
+    if ($Depth -gt $MaxDepth -or (Test-IsInternalWorkspacePath $Path)) {
+        return
+    }
+
+    Get-ChildItem -Path $Path -File -Filter $Filter -ErrorAction SilentlyContinue
+
+    if ($Depth -ge $MaxDepth) {
+        return
+    }
+
+    foreach ($directory in Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue | Sort-Object FullName) {
+        if (-not (Test-IsInternalWorkspacePath $directory.FullName)) {
+            Get-WorkspaceFilesRecursive -Path $directory.FullName -Filter $Filter -MaxDepth $MaxDepth -Depth ($Depth + 1)
+        }
+    }
+}
+
 # ============================================================================
 # PostgreSQL Management
 # ============================================================================
@@ -653,13 +678,42 @@ function Show-ArtifactSummary {
 # Backup / Restore
 # ============================================================================
 
+function Test-IsInternalWorkspacePath {
+    param([string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    foreach ($internalDir in @(
+        $RestoreWorkDir,
+        $ArtifactsDir,
+        (Join-Path $Root '.logs'),
+        (Join-Path $Root '.run'),
+        (Join-Path $Root '.rollback'),
+        (Join-Path $Root '.local'),
+        (Join-Path $Root '.venv'),
+        (Join-Path $Root '.git')
+    )) {
+        if (-not $internalDir) { continue }
+        $fullInternalDir = [IO.Path]::GetFullPath($internalDir)
+        $prefix = $fullInternalDir.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+        if ($fullPath -eq $fullInternalDir -or $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-BackupInput {
     if ($BackupInput) { return $BackupInput }
 
-    $sqlDir = Get-ChildItem -Path $Root -Recurse -Filter 'dump.sql' -File -ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -First 1
+    $sqlDir = Get-WorkspaceFilesRecursive -Path $Root -Filter 'dump.sql' -MaxDepth 3 |
+        Sort-Object FullName |
+        Select-Object -First 1
     if ($sqlDir) { return $sqlDir.Directory.FullName }
 
-    foreach ($zip in Get-ChildItem -Path $Root -Filter '*.zip' -File -ErrorAction SilentlyContinue | Sort-Object FullName) {
+    foreach ($zip in Get-ChildItem -Path $Root -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+        Where-Object { -not (Test-IsInternalWorkspacePath $_.FullName) } |
+        Sort-Object FullName) {
         try {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $archive = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
@@ -670,6 +724,7 @@ function Get-BackupInput {
     }
 
     $candidate = Get-ChildItem -Path $Root -File -ErrorAction SilentlyContinue |
+        Where-Object { -not (Test-IsInternalWorkspacePath $_.FullName) } |
         Where-Object { $_.Extension -in @('.sql', '.dump', '.backup') } |
         Sort-Object FullName |
         Select-Object -First 1
@@ -844,9 +899,31 @@ function Start-OdooDetached {
     Write-Log "started Odoo pid=$($proc.Id)"
 }
 
+function Get-HealthcheckHost {
+    $host = if ($OdooHttpInterface) { $OdooHttpInterface.Trim() } else { '127.0.0.1' }
+    if ($host.StartsWith('[') -and $host.EndsWith(']')) {
+        $host = $host.Substring(1, $host.Length - 2)
+    }
+
+    switch ($host) {
+        '' { return '127.0.0.1' }
+        '0.0.0.0' { return '127.0.0.1' }
+        '::' { return '::1' }
+        default { return $host }
+    }
+}
+
+function Get-HealthcheckUrl {
+    $host = Get-HealthcheckHost
+    if ($host.Contains(':')) {
+        $host = "[$host]"
+    }
+    return "http://${host}:$OdooHttpPort/web/login"
+}
+
 function Wait-OdooHealthy {
     $deadline = (Get-Date).AddSeconds($HealthcheckTimeout)
-    $url = "http://127.0.0.1:$OdooHttpPort/web/login"
+    $url = Get-HealthcheckUrl
     Write-Log "waiting for healthcheck at $url (timeout: ${HealthcheckTimeout}s)"
     do {
         try {

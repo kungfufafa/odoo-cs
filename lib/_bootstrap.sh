@@ -9,7 +9,6 @@
 #   - SETUP_ODOO_VERSION from the VERSION file
 #   - ensure_dirs() for creating required directories
 #   - acquire_lock() / release_lock() for single-instance enforcement
-#   - Dry-run mode support via DRY_RUN=1
 # ============================================================================
 
 [[ -n "${_BOOTSTRAP_SH_LOADED:-}" ]] && return 0
@@ -24,9 +23,6 @@ if [[ -f "$LIB_DIR/../VERSION" ]]; then
 else
   SETUP_ODOO_VERSION="dev"
 fi
-
-# Dry-run mode: when enabled, destructive operations are logged but not executed.
-DRY_RUN="${DRY_RUN:-0}"
 
 # --- Source library modules in dependency order ---
 # 1. Logging first (all other modules depend on log_* functions)

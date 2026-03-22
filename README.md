@@ -15,6 +15,76 @@ chmod +x setup_odoo.sh
 .\setup_odoo.ps1 start
 ```
 
+## Shortcut Full Auto
+
+Kalau direktori kerja sudah berisi tiga artefak ini:
+- paket Odoo: `odoo_*.tar.gz` atau `odoo_*.deb` atau `odoo_*.exe`
+- custom addons: zip atau folder addons yang berisi `__manifest__.py`
+- backup database: zip/folder/file yang berisi `dump.sql` atau `*.dump`/`*.backup`
+
+maka jalur paling praktis adalah:
+
+```bash
+# Linux / macOS
+chmod +x setup_odoo.sh
+./setup_odoo.sh start
+```
+
+Script akan otomatis:
+1. memilih artefak Odoo yang cocok dengan OS
+2. mendeteksi dan mengekstrak custom addons
+3. membuat role dan database PostgreSQL
+4. me-restore `dump.sql` atau `pg_restore`
+5. menyinkronkan `filestore/` bila ada
+6. membuat `odoo.conf`
+7. menyalakan Odoo dan menunggu healthcheck lulus
+
+Catatan Linux fresh server:
+- jika Anda menjalankan script sebagai `root`, script tidak perlu `sudo` lagi
+- jika Anda menjalankan `./setup_odoo.sh start` sebagai user biasa di Ubuntu/Debian, pastikan `sudo` bisa dipakai tanpa prompt interaktif saat proses background berjalan
+- bila masih mengandalkan prompt password `sudo`, gunakan `./setup_odoo.sh bootstrap` di shell aktif atau login sebagai `root` dulu
+
+Kalau ingin hasil paling mulus dan tidak bergantung pada auto-detect nama file, pin artefaknya secara eksplisit:
+
+```bash
+# Linux / macOS
+chmod +x setup_odoo.sh
+
+BACKUP_INPUT="$PWD/<backup-db.zip>" \
+CUSTOM_ADDONS_ZIP_PATTERNS='<custom-addons.zip>' \
+DB_NAME=mkli_local \
+./setup_odoo.sh start
+```
+
+```powershell
+# Windows PowerShell
+$env:BACKUP_INPUT = "$PWD\<backup-db.zip>"
+$env:CUSTOM_ADDONS_ZIP_PATTERNS = "<custom-addons.zip>"
+$env:DB_NAME = "mkli_local"
+.\setup_odoo.ps1 start
+```
+
+Setelah bootstrap sukses, biasanya Anda cukup:
+- buka Odoo di `http://127.0.0.1:8069`
+- login dan langsung gunakan database hasil restore
+- pantau status dengan `./setup_odoo.sh status`
+- pantau bootstrap dengan `./setup_odoo.sh logs`
+- pantau stdout Odoo dengan `tail -f .logs/odoo.stdout.log`
+
+File penting yang perlu dicek setelah setup:
+- `.odoo.secrets.env` untuk password database role dan `admin_passwd`
+- `odoo.conf` untuk bind, port, workers, dan `addons_path`
+- `.logs/bootstrap.log` jika bootstrap gagal atau berhenti di tengah jalan
+
+Shortcut operasional harian:
+
+```bash
+./setup_odoo.sh status   # cek pid dan port
+./setup_odoo.sh logs     # ikuti log bootstrap
+./setup_odoo.sh stop     # hentikan Odoo
+./setup_odoo.sh run      # start ulang dengan konfigurasi terakhir
+```
+
 ## Prasyarat
 
 | Platform | Kebutuhan |
@@ -113,7 +183,6 @@ setup_odoo.sh          ← Dispatcher CLI tipis
 | `MIN_FREE_GB` | `20` | Batas minimum ruang disk kosong |
 | `HEALTHCHECK_TIMEOUT` | `120` | Waktu tunggu healthcheck dalam detik |
 | `STOP_TIMEOUT` | `30` | Timeout graceful shutdown dalam detik |
-| `DRY_RUN` | `0` | Mode pratinjau (belum diimplementasikan) |
 
 ## Fitur
 

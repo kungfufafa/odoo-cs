@@ -233,3 +233,9 @@ teardown() {
   run validate_all_inputs
   [ "$status" -eq 1 ]
 }
+
+@test "validate_all_inputs rejects DRY_RUN preview mode" {
+  export DRY_RUN="1"
+  run validate_all_inputs
+  [ "$status" -eq 1 ]
+}

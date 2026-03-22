@@ -149,7 +149,7 @@ Environment overrides:
   START_AFTER_RESTORE=0|1
   MIN_FREE_GB                     HEALTHCHECK_TIMEOUT
   LOG_LEVEL=DEBUG|INFO|WARN|ERROR LOG_FORMAT=text|json
-  DRY_RUN=0|1                     STOP_TIMEOUT=30
+  STOP_TIMEOUT=30
 EOF
 }
 

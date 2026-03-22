@@ -117,7 +117,12 @@ teardown() {
   [[ "$output" == *"LOG_LEVEL"* ]]
 }
 
-@test "usage output lists DRY_RUN" {
+@test "usage output does not list DRY_RUN" {
   run env ROOT="$PROJECT_ROOT" bash "$PROJECT_ROOT/setup_odoo.sh" help
-  [[ "$output" == *"DRY_RUN"* ]]
+  [[ "$output" != *"DRY_RUN"* ]]
+}
+
+@test ".env.example does not list DRY_RUN" {
+  run grep -En '^[[:space:]]*#?[[:space:]]*DRY_RUN=' "$PROJECT_ROOT/.env.example"
+  [ "$status" -ne 0 ]
 }

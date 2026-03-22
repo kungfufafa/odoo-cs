@@ -26,6 +26,28 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
+@test "run_privileged bypasses sudo when already root" {
+  export PATH="$MOCK_BIN:$PATH"
+  create_mock "id" "0"
+  create_mock "echo_root" "ok"
+  create_mock "sudo" "" 99
+
+  run run_privileged echo_root
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]]
+}
+
+@test "require_noninteractive_sudo_for_background accepts root without sudo" {
+  export PATH="$MOCK_BIN:$PATH"
+  create_mock "id" "0"
+  create_mock "sudo" "" 99
+
+  run require_noninteractive_sudo_for_background
+
+  [ "$status" -eq 0 ]
+}
+
 # --- detect_platform --------------------------------------------------------
 
 @test "detect_platform sets OS_FAMILY" {

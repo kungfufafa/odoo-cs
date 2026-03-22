@@ -7,6 +7,8 @@ load test_helper
 
 setup() {
   setup_test_environment
+  load_module "platform.sh"
+  load_module "install.sh"
   load_module "validation.sh"
   load_module "restore.sh"
 }
@@ -47,4 +49,37 @@ teardown() {
   [ "$(sed -n '5p' "$calls_file")" = "exists:test_db" ]
   [ "$(sed -n '6p' "$calls_file")" = "drop:test_db" ]
   [ "$(sed -n '7p' "$calls_file")" = "rename:test_db_staging:test_db" ]
+}
+
+@test "detect_backup_input ignores internal restore workspace dumps" {
+  mkdir -p "$RESTORE_WORKDIR/stale" "$ROOT/incoming"
+  touch "$RESTORE_WORKDIR/stale/dump.sql"
+  touch "$ROOT/incoming/dump.sql"
+
+  result="$(detect_backup_input)"
+
+  [ "$result" = "$ROOT/incoming" ]
+}
+
+@test "detect_backup_input detects zip backup with python fallback when unzip is unavailable" {
+  python3 - <<PY
+import pathlib
+import zipfile
+
+root = pathlib.Path(r"$ROOT")
+with zipfile.ZipFile(root / "db-backup.zip", "w") as archive:
+    archive.writestr("dump.sql", "-- test dump\n")
+    archive.writestr("filestore/.keep", "")
+PY
+
+  command() {
+    if [[ "$1" == "-v" && "$2" == "unzip" ]]; then
+      return 1
+    fi
+    builtin command "$@"
+  }
+
+  result="$(detect_backup_input)"
+
+  [ "$result" = "$ROOT/db-backup.zip" ]
 }
