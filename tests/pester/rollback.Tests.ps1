@@ -40,7 +40,7 @@ Describe 'Rollback Module' {
     }
 
     It 'Invoke-Rollback continues after individual action failure' {
-        Register-Rollback 'Action 1' { $script:TestVar = 1 }
+        Register-Rollback 'Action 1' { $script:TestVar += 1 }
         Register-Rollback 'Fail Action' { throw 'Test error' }
         Register-Rollback 'Action 3' { $script:TestVar += 3 }
 

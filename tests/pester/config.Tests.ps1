@@ -13,7 +13,6 @@ Describe 'Config Module' {
         }
         It 'returns auto value based on CPU and RAM' {
             $script:OdooWorkers = 'auto'
-            # Assuming mock or just running locally. We don't mock Get-MemoryGB here but we can test it returns a string.
             $result = Get-ResolvedWorkers
             $result | Should -BeOfType [string]
         }
@@ -90,7 +89,7 @@ Describe 'Config Module' {
         It 'creates odoo.conf file containing all required elements' {
             Write-OdooConfig
             Test-Path $script:ConfigFile | Should -Be $true
-            $content = Get-Content $script:ConfigFile
+            $content = Get-Content $script:ConfigFile -Raw
             $content | Should -Match '\[options\]'
             $content | Should -Match 'admin_passwd = admin'
             $content | Should -Match 'proxy_mode = True'

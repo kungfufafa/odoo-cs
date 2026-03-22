@@ -36,25 +36,25 @@ function Start-OdooDetached {
 }
 
 function Get-HealthcheckHost {
-    $host = if ($OdooHttpInterface) { $OdooHttpInterface.Trim() } else { '127.0.0.1' }
-    if ($host.StartsWith('[') -and $host.EndsWith(']')) {
-        $host = $host.Substring(1, $host.Length - 2)
+    $resolvedHost = if ($OdooHttpInterface) { $OdooHttpInterface.Trim() } else { '127.0.0.1' }
+    if ($resolvedHost.StartsWith('[') -and $resolvedHost.EndsWith(']')) {
+        $resolvedHost = $resolvedHost.Substring(1, $resolvedHost.Length - 2)
     }
 
-    switch ($host) {
+    switch ($resolvedHost) {
         '' { return '127.0.0.1' }
         '0.0.0.0' { return '127.0.0.1' }
         '::' { return '::1' }
-        default { return $host }
+        default { return $resolvedHost }
     }
 }
 
 function Get-HealthcheckUrl {
-    $host = Get-HealthcheckHost
-    if ($host.Contains(':')) {
-        $host = "[$host]"
+    $resolvedHost = Get-HealthcheckHost
+    if ($resolvedHost.Contains(':')) {
+        $resolvedHost = "[$resolvedHost]"
     }
-    return "http://${host}:$OdooHttpPort/web/login"
+    return "http://${resolvedHost}:$OdooHttpPort/web/login"
 }
 
 function Wait-OdooHealthy {

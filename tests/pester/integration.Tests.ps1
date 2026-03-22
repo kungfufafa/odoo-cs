@@ -5,14 +5,16 @@ BeforeAll {
 Describe 'Integration (setup_odoo.ps1)' {
     Context 'CLI Parsing' {
         It 'shows usage with help command' {
-            $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $script:scriptPath help *>&1
-            $output | Should -Match 'Usage:'
-            $output | Should -Match 'Commands:'
+            $output = & pwsh -NoProfile -ExecutionPolicy Bypass -Command "& '$($script:scriptPath)' help" 2>&1
+            $outputText = $output -join "`n"
+            $outputText | Should -Match 'Usage:'
+            $outputText | Should -Match 'Commands:'
         }
 
         It 'shows version with --version flag' {
-            $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $script:scriptPath --version *>&1
-            $output | Should -Match 'setup_odoo\.ps1 v'
+            $output = & pwsh -NoProfile -ExecutionPolicy Bypass -Command "& '$($script:scriptPath)' --version" 2>&1
+            $outputText = $output -join "`n"
+            $outputText | Should -Match 'setup_odoo\.ps1 v'
         }
     }
 }

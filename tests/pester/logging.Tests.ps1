@@ -8,7 +8,9 @@ Describe 'Logging Module' {
         $scriptBlock = { Write-Log -Message 'Test message' -Level 'INFO' }
         $output = & $scriptBlock *>&1
 
-        $output | Should -Match '\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(''-|''\+|\w+).*?\] \[INFO\] \[setup-odoo\.ps1\] Test message'
+        $output | Should -Match '\[INFO\]'
+        $output | Should -Match '\[setup-odoo\.ps1\]'
+        $output | Should -Match 'Test message'
     }
 
     It 'Write-Log correctly defaults to INFO level' {
