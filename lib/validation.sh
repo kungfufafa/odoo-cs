@@ -160,6 +160,7 @@ validate_all_inputs() {
   validate_boolean "ODOO_PROXY_MODE" "$ODOO_PROXY_MODE" || (( errors++ ))
   validate_boolean "ODOO_LIST_DB" "$ODOO_LIST_DB" || (( errors++ ))
   validate_boolean "START_AFTER_RESTORE" "$START_AFTER_RESTORE" || (( errors++ ))
+  validate_boolean "ODOO_RUNTIME_AUTO_REPAIR" "$ODOO_RUNTIME_AUTO_REPAIR" || (( errors++ ))
 
   # Enum validations
   validate_enum "RESTORE_MODE" "$RESTORE_MODE" required auto skip || (( errors++ ))
@@ -177,6 +178,8 @@ validate_all_inputs() {
   validate_positive_int "HEALTHCHECK_TIMEOUT" "$HEALTHCHECK_TIMEOUT" || (( errors++ ))
   validate_positive_int "ODOO_LIMIT_TIME_CPU" "$ODOO_LIMIT_TIME_CPU" || (( errors++ ))
   validate_positive_int "ODOO_LIMIT_TIME_REAL" "$ODOO_LIMIT_TIME_REAL" || (( errors++ ))
+  validate_positive_int "ODOO_DEPENDENCY_REPAIR_RETRIES" "$ODOO_DEPENDENCY_REPAIR_RETRIES" || (( errors++ ))
+  validate_positive_int "ODOO_DEPENDENCY_REPAIR_RETRY_DELAY" "$ODOO_DEPENDENCY_REPAIR_RETRY_DELAY" || (( errors++ ))
 
   # Explicitly reject unsupported preview mode to avoid false safety assumptions
   if [[ "${DRY_RUN:-0}" != "0" ]]; then

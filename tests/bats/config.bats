@@ -116,8 +116,15 @@ teardown() {
 }
 
 @test "write_runtime_env contains required keys" {
+  export ODOO_RUNTIME_AUTO_REPAIR="0"
+  export ODOO_DEPENDENCY_REPAIR_RETRIES="9"
+  export ODOO_DEPENDENCY_REPAIR_RETRY_DELAY="11"
+
   write_runtime_env
   grep -q "ROOT=" "$RUNTIME_ENV_FILE"
   grep -q "DB_NAME=" "$RUNTIME_ENV_FILE"
   grep -q "ODOO_HTTP_PORT=" "$RUNTIME_ENV_FILE"
+  grep -q "^ODOO_RUNTIME_AUTO_REPAIR=0$" "$RUNTIME_ENV_FILE"
+  grep -q "^ODOO_DEPENDENCY_REPAIR_RETRIES=9$" "$RUNTIME_ENV_FILE"
+  grep -q "^ODOO_DEPENDENCY_REPAIR_RETRY_DELAY=11$" "$RUNTIME_ENV_FILE"
 }

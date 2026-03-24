@@ -54,3 +54,44 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$(cat "$calls_file")" = "checked" ]
 }
+
+@test "prepare_odoo_runtime runs dependency preflight after loading runtime env" {
+  local calls_file="$TEST_TMP/runtime_calls.txt"
+
+  load_runtime_env() {
+    export ODOO_BIN="/usr/bin/odoo"
+    printf 'load\n' >>"$calls_file"
+  }
+  detect_platform() {
+    OS_FAMILY="linux"
+    printf 'platform\n' >>"$calls_file"
+  }
+  ensure_odoo_runtime_python_dependencies() {
+    printf 'preflight\n' >>"$calls_file"
+  }
+
+  run prepare_odoo_runtime
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$calls_file")" = $'load\nplatform\npreflight' ]
+}
+
+@test "load_runtime_env preserves explicit dependency repair overrides" {
+  cat > "$RUNTIME_ENV_FILE" <<'EOF'
+ODOO_BIN=/usr/bin/odoo
+ODOO_RUNTIME_AUTO_REPAIR=1
+ODOO_DEPENDENCY_REPAIR_RETRIES=3
+ODOO_DEPENDENCY_REPAIR_RETRY_DELAY=5
+EOF
+
+  export ODOO_RUNTIME_AUTO_REPAIR="0"
+  export ODOO_DEPENDENCY_REPAIR_RETRIES="9"
+  export ODOO_DEPENDENCY_REPAIR_RETRY_DELAY="11"
+
+  load_runtime_env
+
+  [ "$ODOO_BIN" = "/usr/bin/odoo" ]
+  [ "$ODOO_RUNTIME_AUTO_REPAIR" = "0" ]
+  [ "$ODOO_DEPENDENCY_REPAIR_RETRIES" = "9" ]
+  [ "$ODOO_DEPENDENCY_REPAIR_RETRY_DELAY" = "11" ]
+}

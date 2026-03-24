@@ -60,7 +60,25 @@ should_use_sudo_for_db() {
     return 0
   fi
   command -v sudo >/dev/null 2>&1 || return 1
+  if shell_has_tty; then
+    return 0
+  fi
+  sudo_can_run_noninteractive || return 1
   return 0
+}
+
+# Resolve the host to use for TCP-based admin connections.
+# Local socket paths are normalized to loopback so the fallback is real TCP.
+# Output: host value on stdout
+resolve_tcp_db_admin_host() {
+  case "${DB_HOST:-}" in
+    ""|/*)
+      printf '127.0.0.1\n'
+      ;;
+    *)
+      printf '%s\n' "$DB_HOST"
+      ;;
+  esac
 }
 
 # Execute a command as the local postgres OS user.
@@ -69,19 +87,29 @@ run_local_postgres_command() {
   if is_root_user; then
     if command -v runuser >/dev/null 2>&1; then
       runuser -u postgres -- "$@"
-      return 0
+      return $?
     fi
     if command -v su >/dev/null 2>&1; then
       local command_string
       printf -v command_string '%q ' "$@"
       su -s /bin/sh postgres -c "$command_string"
-      return 0
+      return $?
     fi
     log_fatal "required command not found: runuser or su"
   fi
 
   require_cmd sudo
-  sudo -u postgres "$@"
+  if shell_has_tty; then
+    sudo -u postgres "$@"
+    return $?
+  fi
+
+  if sudo_can_run_noninteractive; then
+    sudo -n -u postgres "$@"
+    return $?
+  fi
+
+  log_fatal "PostgreSQL admin access requires sudo but no terminal is available — rerun './setup_odoo.sh bootstrap' in an interactive shell, configure passwordless sudo, or set DB_PROVISION_METHOD=tcp with DB_ADMIN_PASSWORD"
 }
 
 # Execute a SQL statement as the database admin user using psql.
@@ -90,6 +118,7 @@ run_local_postgres_command() {
 # Output: query result on stdout
 run_admin_psql() {
   local sql="$1"
+  local tcp_host
   require_cmd psql
 
   if should_use_sudo_for_db; then
@@ -99,7 +128,8 @@ run_admin_psql() {
       run_local_postgres_command psql -v ON_ERROR_STOP=1 -p "$DB_PORT" -d postgres -Atqc "$sql"
     fi
   else
-    PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -v ON_ERROR_STOP=1 -Atqc "$sql"
+    tcp_host="$(resolve_tcp_db_admin_host)"
+    PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$tcp_host" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -v ON_ERROR_STOP=1 -Atqc "$sql"
   fi
 }
 
@@ -116,6 +146,21 @@ test_db_connection() {
     sleep "$DB_CONNECT_RETRY_DELAY"
     (( attempt++ ))
   done
+  if [[ "$DB_PROVISION_METHOD" == "auto" ]] &&
+     [[ "$OS_FAMILY" == "linux" ]] &&
+     [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]] &&
+     [[ "$DB_ADMIN_USER" == "postgres" ]] &&
+     db_host_is_local &&
+     ! is_root_user &&
+     ! shell_has_tty &&
+     command -v sudo >/dev/null 2>&1 &&
+     ! sudo_can_run_noninteractive; then
+    if [[ -n "${DB_ADMIN_PASSWORD:-}" ]]; then
+      log_error "auto DB provisioning skipped local sudo because no terminal/passwordless sudo was available; verify DB_ADMIN_PASSWORD for TCP admin access"
+    else
+      log_error "auto DB provisioning cannot use local sudo without a terminal; rerun interactively, configure passwordless sudo, or set DB_PROVISION_METHOD=tcp with DB_ADMIN_PASSWORD"
+    fi
+  fi
   log_error "unable to connect to PostgreSQL after $DB_CONNECT_RETRIES attempts"
   return 1
 }

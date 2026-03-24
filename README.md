@@ -99,8 +99,52 @@ DB_NAME=perusahaan_db BACKUP_INPUT="$PWD/backup-kemarin.zip" ./setup_odoo.sh sta
 - `RESTORE_MODE` (`required`, `auto`, `skip`): Menentukan seberapa wajib proses _restore_ ini diberlakukan.
 - `CUSTOM_ADDONS_ZIP_PATTERNS` (Default: `*addons*.zip`): Pola nama file regex untuk custom plugins Odoo.
 - `ODOO_WORKERS` (Default: auto): Men-setting auto-tuning jumlah *worker* otomatis berdasar Core CPU & RAM.
+- `ODOO_RUNTIME_AUTO_REPAIR` (Default: `1`): Menentukan apakah runtime preflight boleh memperbaiki dependency Python yang hilang sebelum Odoo dijalankan.
 
 *(Gunakan `./setup_odoo.sh help` atau `.\setup_odoo.ps1 help` untuk melihat seluruh konfigurasi env yang didukung).*
+
+---
+
+## 🔧 Troubleshooting
+
+Jika log Odoo menampilkan error berikut saat start:
+
+```text
+ImportError: lxml.html.clean module is now a separate project lxml_html_clean.
+```
+
+versi script ini akan melakukan preflight dependency sebelum Odoo dijalankan, baik saat bootstrap maupun `run`:
+- Install source/tarball: memeriksa virtualenv Odoo, lalu menambahkan `lxml_html_clean` bila runtime belum memilikinya.
+- Install `.deb`: membaca interpreter dari shebang `odoo` yang terpasang, mencoba `apt-get install python3-lxml-html-clean`, lalu fallback ke `python3 -m pip install lxml_html_clean` bila paket distro belum cukup.
+- Repair dijalankan dengan retry agar lebih tahan terhadap apt/pip transient failure.
+- Pada shell non-interaktif, script akan gagal cepat bila butuh `sudo` tetapi tidak bisa prompt, sehingga tidak menggantung diam-diam di background.
+
+Jika Anda ingin mode strict tanpa auto-install saat runtime, jalankan:
+
+```bash
+ODOO_RUNTIME_AUTO_REPAIR=0 ./setup_odoo.sh run -d <nama_db>
+```
+
+Untuk host yang sudah telanjur terpasang sebelum perbaikan ini, jalankan bootstrap/install ulang atau pasang dependensinya manual lalu start ulang Odoo:
+
+```bash
+sudo apt-get install -y python3-lxml-html-clean || sudo python3 -m pip install --break-system-packages lxml_html_clean
+./setup_odoo.sh run -d <nama_db>
+```
+
+Jika bootstrap/background log menampilkan error berikut:
+
+```text
+sudo: a terminal is required to read the password
+sudo: a password is required
+```
+
+artinya provisioning PostgreSQL mencoba jalur `sudo` di shell non-interaktif. Gunakan salah satu opsi berikut:
+- Jalankan bootstrap interaktif agar prompt password bisa muncul: `./setup_odoo.sh bootstrap`
+- Jalankan sebagai `root` atau aktifkan passwordless sudo untuk user deploy
+- Pakai koneksi admin PostgreSQL via TCP: `DB_PROVISION_METHOD=tcp DB_ADMIN_PASSWORD='<password-admin-postgres>' ./setup_odoo.sh start`
+
+Mode `DB_PROVISION_METHOD=auto` sekarang akan mencoba fallback ke TCP bila `sudo` lokal tidak bisa dipakai tanpa TTY, tetapi fallback tersebut tetap membutuhkan kredensial admin PostgreSQL yang valid.
 
 ---
 

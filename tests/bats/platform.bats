@@ -48,6 +48,35 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+@test "run_privileged fails fast without tty when sudo cannot run non-interactively" {
+  export PATH="$MOCK_BIN:$PATH"
+  create_mock "id" "1000"
+  create_mock "sudo" "" 1
+
+  shell_has_tty() {
+    return 1
+  }
+
+  run run_privileged true
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"command requires sudo but no terminal is available"* ]]
+}
+
+@test "run_privileged returns the wrapped command status" {
+  export PATH="$MOCK_BIN:$PATH"
+  create_mock "id" "1000"
+  create_mock "sudo" "" 42
+
+  shell_has_tty() {
+    return 0
+  }
+
+  run run_privileged true
+
+  [ "$status" -eq 42 ]
+}
+
 # --- detect_platform --------------------------------------------------------
 
 @test "detect_platform sets OS_FAMILY" {

@@ -41,16 +41,28 @@ pid_is_running() {
 
 # Load the runtime environment file (written by bootstrap).
 load_runtime_env() {
+  local runtime_auto_repair_override="${ODOO_RUNTIME_AUTO_REPAIR-__unset__}"
+  local runtime_retries_override="${ODOO_DEPENDENCY_REPAIR_RETRIES-__unset__}"
+  local runtime_retry_delay_override="${ODOO_DEPENDENCY_REPAIR_RETRY_DELAY-__unset__}"
+
   if [[ -f "$RUNTIME_ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$RUNTIME_ENV_FILE"
   fi
+
+  if [[ "$runtime_auto_repair_override" != "__unset__" ]]; then
+    ODOO_RUNTIME_AUTO_REPAIR="$runtime_auto_repair_override"
+  fi
+  if [[ "$runtime_retries_override" != "__unset__" ]]; then
+    ODOO_DEPENDENCY_REPAIR_RETRIES="$runtime_retries_override"
+  fi
+  if [[ "$runtime_retry_delay_override" != "__unset__" ]]; then
+    ODOO_DEPENDENCY_REPAIR_RETRY_DELAY="$runtime_retry_delay_override"
+  fi
 }
 
-# Run Odoo in the foreground (exec replaces the current process).
-# Sets up platform-specific library paths before launching.
-# Arguments: passed through to Odoo binary
-run_odoo() {
+# Prepare environment variables and dependency preflight before launching Odoo.
+prepare_odoo_runtime() {
   load_runtime_env
   detect_platform
 
@@ -60,12 +72,23 @@ run_odoo() {
     export DYLD_LIBRARY_PATH="/opt/homebrew/opt/libpq/lib:/opt/homebrew/opt/openldap/lib:${DYLD_LIBRARY_PATH:-}"
   fi
 
+  ensure_odoo_runtime_python_dependencies
+}
+
+# Run Odoo in the foreground (exec replaces the current process).
+# Sets up platform-specific library paths before launching.
+# Arguments: passed through to Odoo binary
+run_odoo() {
+  local odoo_conf
+  prepare_odoo_runtime
+  odoo_conf="${ODOO_CONF:-$ROOT/odoo.conf}"
+
   if [[ -n "${ODOO_BIN:-}" ]]; then
-    exec "$ODOO_BIN" -c "$ROOT/odoo.conf" "$@"
+    exec "$ODOO_BIN" -c "$odoo_conf" "$@"
   fi
 
   [[ -n "${ODOO_SRC_DIR:-}" ]] || log_fatal "ODOO_SRC_DIR not set"
-  exec "$VENV_DIR/bin/python" "$ODOO_SRC_DIR/setup/odoo" -c "$ROOT/odoo.conf" "$@"
+  exec "$VENV_DIR/bin/python" "$ODOO_SRC_DIR/setup/odoo" -c "$odoo_conf" "$@"
 }
 
 # Start Odoo as a detached background process.

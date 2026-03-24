@@ -24,14 +24,41 @@ is_root_user() {
   [[ "$(id -u)" == "0" ]]
 }
 
+# Return success when the current shell still has a usable terminal attached.
+shell_has_tty() {
+  [[ -t 0 || -t 1 || -t 2 ]]
+}
+
+# Return success when sudo can run without prompting for a password.
+sudo_can_run_noninteractive() {
+  if is_root_user; then
+    return 0
+  fi
+
+  require_cmd sudo
+  sudo -n true >/dev/null 2>&1
+}
+
 # Run a command with root privileges.
 # Uses sudo only when the current shell is not already root.
 run_privileged() {
   if is_root_user; then
     "$@"
-  else
-    require_cmd sudo
+    return $?
+  fi
+
+  require_cmd sudo
+
+  if shell_has_tty; then
     sudo "$@"
+    return $?
+  fi
+
+  if sudo_can_run_noninteractive; then
+    sudo -n "$@"
+    return $?
+  else
+    log_fatal "command requires sudo but no terminal is available — run in an interactive shell, configure passwordless sudo, or preinstall the required dependency"
   fi
 }
 
@@ -41,8 +68,7 @@ require_noninteractive_sudo_for_background() {
     return 0
   fi
 
-  require_cmd sudo
-  sudo -n true >/dev/null 2>&1 || log_fatal "background bootstrap cannot prompt for sudo password — run as root, configure passwordless sudo, or use './setup_odoo.sh bootstrap' in an interactive shell"
+  sudo_can_run_noninteractive || log_fatal "background bootstrap cannot prompt for sudo password — run as root, configure passwordless sudo, or use './setup_odoo.sh bootstrap' in an interactive shell"
 }
 
 # List archive entries from a zip file.
