@@ -114,11 +114,8 @@ log_fatal() {
   exit 1
 }
 
-# Backward-compatible wrappers for the original log() and die() functions.
+# Backward-compatible wrapper for the original log() function.
 log() {
   log_info "$@"
 }
 
-die() {
-  log_fatal "$@"
-}

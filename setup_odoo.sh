@@ -950,83 +950,6 @@ ensure_system_prerequisites() {
   log_info "System prerequisites OK"
 }
 
-# Post-deployment validation: verify database connectivity, table counts,
-# module detection, and HTTP healthcheck after Odoo is fully started.
-_post_deployment_validation() {
-  local errors=0
-
-  # 1. Verify database is reachable and has core tables
-  log_info "  [1/4] Verifying database connectivity..."
-  if command -v psql >/dev/null 2>&1; then
-    local db_result
-    db_result="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ' || echo "")"
-    if [[ "$db_result" =~ ^[0-9]+$ ]] && (( db_result > 0 )); then
-      log_info "  [OK]   Database reachable: $DB_NAME ($db_result tables)"
-    else
-      log_error "  [FAIL] Database $DB_NAME is not reachable or has 0 tables"
-      (( errors++ ))
-    fi
-
-    # Verify minimum core tables
-    local core_tables_count=0
-    local core_table
-    for core_table in ir_module_module res_users ir_config_parameter; do
-      local exists
-      exists="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='$core_table';" 2>/dev/null | tr -d ' ')"
-      if [[ "$exists" == "1" ]]; then
-        (( core_tables_count++ ))
-      fi
-    done
-    if (( core_tables_count >= 3 )); then
-      log_info "  [OK]   Core Odoo tables verified ($core_tables_count/3)"
-    else
-      log_error "  [FAIL] Missing core Odoo tables (only $core_tables_count/3 found)"
-      (( errors++ ))
-    fi
-  else
-    log_warn "  [WARN] psql not available — skipping database verification"
-  fi
-
-  # 2. Verify module detection
-  log_info "  [2/4] Verifying module detection..."
-  if command -v psql >/dev/null 2>&1; then
-    local installed_modules custom_installed=0
-    installed_modules="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM ir_module_module WHERE state='installed';" 2>/dev/null | tr -d ' ' || echo "0")"
-    custom_installed="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM ir_module_module WHERE state='installed' AND name NOT IN ('base','web','website','bus','mail','http','base_import','base_setup','web_tour','report','web_settings_dashboard');" 2>/dev/null | tr -d ' ' || echo "0")"
-    log_info "  [OK]   Modules: $installed_modules installed ($custom_installed custom)"
-  fi
-
-  # 3. Verify custom addons path
-  log_info "  [3/4] Verifying custom addons..."
-  if [[ -n "${CUSTOM_ADDONS_DIR:-}" && -d "${CUSTOM_ADDONS_DIR:-}" ]]; then
-    local manifest_count
-    manifest_count="$(find "$CUSTOM_ADDONS_DIR" -maxdepth 2 -name '__manifest__.py' 2>/dev/null | wc -l | tr -d ' ')"
-    log_info "  [OK]   Custom addons: $manifest_count module(s) in $CUSTOM_ADDONS_DIR"
-  else
-    log_warn "  [WARN] Custom addons directory not detected"
-  fi
-
-  # 4. HTTP healthcheck (already done in bootstrap_detached, but verify again)
-  log_info "  [4/4] Verifying HTTP endpoint..."
-  local hc_url
-  hc_url="$(healthcheck_url)"
-  if command -v curl >/dev/null 2>&1; then
-    local http_code
-    http_code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 --connect-timeout 5 "$hc_url" 2>/dev/null || echo "000")"
-    if [[ "$http_code" =~ ^(200|302|303|304)$ ]]; then
-      log_info "  [OK]   HTTP endpoint responding: $hc_url (HTTP $http_code)"
-    else
-      log_error "  [FAIL] HTTP endpoint not responding correctly: $hc_url (HTTP $http_code)"
-      (( errors++ ))
-    fi
-  fi
-
-  if (( errors > 0 )); then
-    log_warn "Post-deployment validation: $errors issue(s) detected — Odoo may not be fully functional"
-  else
-    log_info "═══ POST-DEPLOYMENT VALIDATION PASSED ═══"
-  fi
-}
 
 # ============================================================================
 # Uninstall / Clean Removal
@@ -1380,16 +1303,16 @@ fetch_start() {
     export RESTORE_MODE="required"
   fi
 
-  # --- Production hardening: extend healthcheck timeout for first boot ---
-  if (( HEALTHCHECK_TIMEOUT <= 300 )); then
-    log_info "Auto-hardening: extending HEALTHCHECK_TIMEOUT to 600s for first boot"
-    export HEALTHCHECK_TIMEOUT=600
-  fi
-
   # --- Production hardening: lower MIN_FREE_GB requirement for fetch-start ---
   if (( MIN_FREE_GB > 5 )); then
     log_info "Auto-hardening: lowering MIN_FREE_GB from ${MIN_FREE_GB} to 5 for fetch-start"
     export MIN_FREE_GB=5
+  fi
+
+  # --- Production hardening: extend healthcheck timeout for first boot ---
+  if (( HEALTHCHECK_TIMEOUT <= 300 )); then
+    log_info "Auto-hardening: extending HEALTHCHECK_TIMEOUT to 600s for first boot"
+    export HEALTHCHECK_TIMEOUT=600
   fi
 
   # --- Production hardening: security baseline ---
@@ -1414,9 +1337,9 @@ fetch_start() {
   # --- Pre-flight: install system prerequisites on fresh OS ---
   ensure_system_prerequisites
 
-  # --- Pre-flight: sudo authentication (prevents timeout during downloads) ---
+  # --- Pre-flight: sudo authentication (kept alive during long downloads) ---
   if command -v sudo >/dev/null 2>&1 && ! is_root_user; then
-    log_info "Prompting for sudo password upfront to prevent timeout during long downloads..."
+    log_info "Authenticating sudo..."
     sudo -v || log_fatal "Sudo authentication failed. Required for PostgreSQL/Odoo installation."
     ( while true; do sudo -n true; sleep 60; kill -0 $$ || exit 0; done 2>/dev/null & )
   fi
@@ -1425,16 +1348,23 @@ fetch_start() {
   log_info "═══ PHASE 1: DOWNLOAD ARTIFACTS ═══"
   download_drive_artifacts "$url"
 
-  # --- Phase 2: Bootstrap and start ---
-  log_info "═══ PHASE 2: BOOTSTRAP & START ═══"
-  bootstrap_detached
+  # --- Phase 2: Bootstrap (prepare environment) ---
+  log_info "═══ PHASE 2: BOOTSTRAP ═══"
+  set_bootstrap_exit_trap
+  prepare_environment
 
-  # --- Phase 3: Post-deployment validation ---
-  log_info "═══ PHASE 3: POST-DEPLOYMENT VALIDATION ═══"
-  _post_deployment_validation
+  # --- Phase 3: Start Odoo through the managed detached launcher ---
+  if [[ "$START_AFTER_RESTORE" == "1" ]]; then
+    log_info "═══ PHASE 3: START ODOO ═══"
+    log_info "Starting Odoo via managed detached launcher on port $ODOO_HTTP_PORT..."
+    start_odoo_detached -d "$DB_NAME" --http-port="$ODOO_HTTP_PORT"
+    healthcheck_odoo
+  else
+    log_info "Bootstrap complete; start manually with: $ROOT/setup_odoo.sh run -d $DB_NAME"
+  fi
 
-  # --- Phase 4: Success summary ---
-  log_info "═══ PHASE 4: SUCCESS ═══"
+  # --- Phase 4: Access summary ---
+  log_info "═══ PHASE 4: ACCESS SUMMARY ═══"
   print_access_summary
 }
 

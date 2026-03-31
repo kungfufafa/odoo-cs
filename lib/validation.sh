@@ -74,17 +74,6 @@ validate_enum() {
   return 0
 }
 
-# Validate that a path exists on the filesystem.
-# Arguments: $1=label, $2=path
-validate_path_exists() {
-  local label="$1" path="$2"
-  if [[ ! -e "$path" ]]; then
-    log_error "$label path does not exist: '$path'"
-    return 1
-  fi
-  return 0
-}
-
 # Validate that a path is a directory.
 # Arguments: $1=label, $2=path
 validate_dir_exists() {
@@ -132,12 +121,11 @@ validate_auto_or_positive_int() {
   return 0
 }
 
-# Sanitize a path: resolve symlinks, remove trailing slashes.
+# Sanitize a path by removing trailing slashes while preserving root.
 # Arguments: $1=path
 # Output: sanitized path on stdout
 sanitize_path() {
   local path="$1"
-  # Remove trailing slashes (but keep root /)
   path="${path%"${path##*[!/]}"}"
   [[ -z "$path" ]] && path="/"
   printf '%s\n' "$path"

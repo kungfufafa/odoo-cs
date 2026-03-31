@@ -85,6 +85,10 @@ teardown() {
   export CUSTOM_ADDONS_DIR="$ARTIFACTS_DIR/custom-addons"
   mkdir -p "$CUSTOM_ADDONS_DIR" "$DATA_DIR"
 
+  run_privileged() {
+    "$@"
+  }
+
   chown() {
     printf 'chown:%s\n' "$*" >>"$calls_file"
   }

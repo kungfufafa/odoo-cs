@@ -28,38 +28,105 @@ Letakkan minimal **salah satu** file instalasi Odoo berikut sejajar dengan direk
 
 ---
 
+## 🚀 Mulai Dari Sini
+
+Untuk **Linux production**, jalur yang paling aman biasanya seperti ini:
+
+1. Clone repo ke `/opt/odoo-cs`, bukan ke `/root/odoo-cs`.
+2. Jalankan proses panjang dari `tmux` atau `screen`, terutama `fetch-start`.
+3. Jika artefak masih ada di Google Drive, gunakan `fetch-start`.
+4. Jika artefak sudah ada lokal, gunakan `bootstrap`.
+
+Contoh baseline yang direkomendasikan:
+
+```bash
+apt-get update && apt-get install -y tmux git
+cd /opt
+git clone https://github.com/kungfufafa/odoo-cs.git
+cd /opt/odoo-cs
+tmux new -s odoo
+```
+
+> 📝 **Kenapa `/opt/odoo-cs`?** Path di bawah `/root` sering memunculkan warning akses `_apt`, menyulitkan service non-root, dan kurang ideal untuk auto-start setelah reboot.
+
+### Step-by-Step Linux (User Biasa + sudo)
+
+Jika Anda login sebagai user biasa yang **bukan root** tetapi punya `sudo`, ikuti urutan ini:
+
+```bash
+# 1. Install tool dasar
+sudo apt-get update
+sudo apt-get install -y tmux git rsync
+
+# 2. Clone repo ke /opt
+cd /opt
+sudo git clone https://github.com/kungfufafa/odoo-cs.git
+sudo chown -R $USER:$USER /opt/odoo-cs
+
+# 3. Masuk ke workspace
+cd /opt/odoo-cs
+
+# 4. Buka session tmux
+tmux new -s odoo
+
+# 5A. Jika artefak masih di Google Drive
+chmod +x setup_odoo.sh download_drive_folder.sh
+./setup_odoo.sh fetch-start 'URL_FOLDER_GDRIVE'
+
+# 5B. Jika artefak sudah ada lokal
+chmod +x setup_odoo.sh
+./setup_odoo.sh bootstrap
+```
+
+Setelah `tmux` terbuka:
+- detach tanpa mematikan proses: `Ctrl+B`, lalu `D`
+- masuk lagi ke session: `tmux attach -t odoo`
+- lihat daftar session: `tmux ls`
+
+Jika `/opt/odoo-cs` sudah ada dan sebelumnya dibuat oleh `root`, cukup rapikan ownership lalu lanjut:
+
+```bash
+sudo chown -R $USER:$USER /opt/odoo-cs
+cd /opt/odoo-cs
+tmux new -s odoo
+./setup_odoo.sh bootstrap
+```
+
 ## 🚀 Panduan Penggunaan
 
 Pilih salah satu alur spesifik di bawah ini yang sesuai dengan kondisi server Anda:
 
 ### A. Alur Server Fresh (Semua Artefak dari Google Drive)
-Jika Anda men-deploy ke VPS baru dan file masih tersimpan di Google Drive, Anda dapat menarik semuanya secara otomatis di *background*.
+Gunakan ini jika Odoo installer, custom addons, dan backup database masih ada di Google Drive.
 
 ```bash
-# 1. Clone repositori & masuk ke proyek (Gunakan root/sudo -i disarankan)
+# 1. Clone repositori ke path shared
+cd /opt
 git clone https://github.com/kungfufafa/odoo-cs.git
-cd odoo-cs
+cd /opt/odoo-cs
 
-# 2. Download seluruh file instalasi (odoo, addons, database) dari GDrive
-bash download_drive_folder.sh start 'URL_FOLDER_GDRIVE'
+# 2. Jalankan dari tmux agar aman saat SSH putus
+apt-get update && apt-get install -y tmux
+tmux new -s odoo
 
-# 3. Pantau log download (Ctrl+C untuk keluar)
-tail -f .logs/drive-folder-download.log
-
-# 4. Setelah download selesai, eksekusi setup
-chmod +x setup_odoo.sh
-./setup_odoo.sh start
-```
-
-Untuk mode satu perintah yang langsung download lalu bootstrap:
-
-```bash
-chmod +x setup_odoo.sh
+# 3. Download + bootstrap + start Odoo
+chmod +x setup_odoo.sh download_drive_folder.sh
 ./setup_odoo.sh fetch-start 'URL_FOLDER_GDRIVE'
 ```
 
-Mode `fetch-start` akan otomatis membuka Odoo ke `0.0.0.0:8069` bila `ODOO_HTTP_INTERFACE` belum diisi, sehingga setelah bootstrap selesai Anda bisa langsung akses lewat IP server.
-Selain itu, script akan memilih satu user Odoo aktif, mereset password browser-nya ke secret bootstrap, lalu menuliskannya ke `.odoo.secrets.env` agar user bisa langsung login ke `/web/login` tanpa menebak kredensial hasil restore.
+Perintah `fetch-start` akan (fase download dan bootstrap berjalan linear di shell aktif):
+- melakukan pre-flight check
+- mengunduh artefak dari Google Drive
+- install dependency sistem
+- restore database dan filestore
+- menjalankan post-restore hardening
+- start Odoo lewat launcher terkelola (detached/background)
+- melakukan healthcheck
+- menampilkan access summary (kredensial login)
+
+Mode `fetch-start` juga akan otomatis membuka Odoo ke `0.0.0.0:8069` bila `ODOO_HTTP_INTERFACE` belum diisi, sehingga setelah bootstrap selesai Anda bisa langsung akses lewat IP server. Selain itu, script akan memilih satu user Odoo aktif, mereset password browser-nya ke secret bootstrap, lalu menuliskannya ke `.odoo.secrets.env` agar user bisa langsung login ke `/web/login` tanpa menebak kredensial hasil restore.
+
+Karena fase download dan bootstrap `fetch-start` tetap berjalan di shell aktif, **pastikan menjalankannya dari `tmux`** agar proses tidak mati saat SSH terputus.
 
 Jika Anda ingin mengubah bind host secara eksplisit:
 
@@ -68,12 +135,14 @@ ODOO_HTTP_INTERFACE=10.20.30.40 ./setup_odoo.sh fetch-start 'URL_FOLDER_GDRIVE'
 ```
 
 ### B. Alur Cepat (Artefak Sudah Tersedia Secara Lokal)
-Jika paket instalasi Odoo (`.deb`/`.tar.gz`/`.exe`), file custom addons, dan backup file database sudah ada sejajar dengan script ini.
+Gunakan ini jika paket instalasi Odoo, custom addons, dan backup file database **sudah ada lokal** di folder proyek.
 
 **Linux / macOS:**
 ```bash
+cd /opt/odoo-cs
+tmux new -s odoo
 chmod +x setup_odoo.sh
-./setup_odoo.sh start
+./setup_odoo.sh bootstrap
 ```
 
 **Windows (PowerShell):**
@@ -83,7 +152,21 @@ chmod +x setup_odoo.sh
 
 Script akan otomatis: mendeteksi OS, mendeteksi & ekstrak addons/backup database, men-setup PostgreSQL (`role` & `database`), melakukan _restore_, membuat file `odoo.conf`, dan menyalakan proses Odoo secara otomatis.
 
+> 📝 **Catatan:** Untuk first deployment via SSH, `fetch-start` atau `bootstrap` lebih aman karena fase bootstrap berjalan interaktif di shell aktif. Gunakan `start` jika Anda memang ingin bootstrap detached dari awal dan user deploy Anda sudah siap untuk sudo non-interaktif.
+
 > 📝 **Catatan:** Command `start`/`bootstrap` default-nya tetap bind ke `127.0.0.1:8069`. Khusus `fetch-start`, script otomatis expose ke jaringan agar bisa langsung diakses lewat IP server. File rahasia seperti konfigurasi password *master* dan password login browser akan digenerate otomatis ke file `.odoo.secrets.env` (Linux/Mac) atau `.odoo.secrets.ps1` (Windows).
+
+### C. Memilih Command Yang Tepat
+
+Gunakan command berikut sesuai kondisi:
+
+| Command | Kapan Dipakai | Catatan |
+|---|---|---|
+| `./setup_odoo.sh fetch-start '<URL>'` | Artefak masih di Google Drive | Rekomendasi untuk VPS baru; jalankan dari `tmux`; Odoo start detached setelah bootstrap |
+| `./setup_odoo.sh bootstrap` | Artefak sudah ada lokal | Bootstrap + start Odoo detached (background) |
+| `./setup_odoo.sh foreground` | Artefak lokal, ingin foreground | Bootstrap + Odoo foreground (`Ctrl+C` untuk stop) |
+| `./setup_odoo.sh start` | Ingin bootstrap detached di background | Cocok jika sudo non-interaktif sudah siap |
+| `./setup_odoo.sh run -d <db>` | Menyalakan Odoo lagi dengan config terakhir | Tidak melakukan bootstrap ulang |
 
 ---
 
@@ -166,6 +249,14 @@ artinya provisioning PostgreSQL mencoba jalur `sudo` di shell non-interaktif. Gu
 - Pakai koneksi admin PostgreSQL via TCP: `DB_PROVISION_METHOD=tcp DB_ADMIN_PASSWORD='<password-admin-postgres>' ./setup_odoo.sh start`
 
 Mode `DB_PROVISION_METHOD=auto` sekarang akan mencoba fallback ke TCP bila `sudo` lokal tidak bisa dipakai tanpa TTY, tetapi fallback tersebut tetap membutuhkan kredensial admin PostgreSQL yang valid.
+
+Jika log `apt` menampilkan pesan seperti berikut:
+
+```text
+N: Download is performed unsandboxed as root ... couldn't be accessed by user '_apt'
+```
+
+itu biasanya berarti Anda menjalankan proyek dari `/root/odoo-cs`. Install masih bisa lanjut, tetapi itu bukan layout yang direkomendasikan. Pindahkan workspace ke `/opt/odoo-cs`, lalu jalankan ulang bootstrap dari sana agar instalasi paket dan service runtime lebih bersih.
 
 ---
 

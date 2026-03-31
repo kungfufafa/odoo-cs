@@ -361,22 +361,3 @@ stop_background() {
   stop_pid_file "$BOOTSTRAP_PID_FILE" "bootstrap"
 }
 
-# Register signal handlers for graceful shutdown during bootstrap/foreground.
-register_signal_handlers() {
-  trap '_on_signal SIGTERM' TERM
-  trap '_on_signal SIGINT' INT
-  trap '_on_signal SIGHUP' HUP
-}
-
-# Internal signal handler that attempts cleanup before exiting.
-_on_signal() {
-  local signal="$1"
-  log_warn "received $signal, initiating graceful shutdown..."
-  if declare -f cleanup_bootstrap_state >/dev/null 2>&1; then
-    cleanup_bootstrap_state
-  fi
-  if declare -f release_lock >/dev/null 2>&1; then
-    release_lock
-  fi
-  exit 130
-}

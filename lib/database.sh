@@ -204,11 +204,6 @@ terminate_db_connections_named() {
   run_admin_psql "$sql" >/dev/null || true
 }
 
-# Terminate all active connections to the configured target database.
-# Silently ignores errors (connections may already be gone).
-terminate_db_connections() {
-  terminate_db_connections_named "$DB_NAME"
-}
 
 # Create the given database if it does not already exist.
 # Arguments: $1=database name, $2=owner role
