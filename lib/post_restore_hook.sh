@@ -638,15 +638,17 @@ auto_install_custom_modules() {
 
         # Check if module already exists in ir_module_module
         local exists state
-        exists="$(run_target_db_scalar "SELECT COUNT(*) FROM ir_module_module WHERE name = '$technical_name';" 2>/dev/null || echo "0")"
+        local escaped_name
+        escaped_name="$(sql_escape_literal "$technical_name")"
+        exists="$(run_target_db_scalar "SELECT COUNT(*) FROM ir_module_module WHERE name = '$escaped_name';" 2>/dev/null || echo "0")"
 
         if [[ "$exists" == "0" ]]; then
             # Insert new module record so Odoo can detect it
-            run_target_db_sql "INSERT INTO ir_module_module (name, state, latest_version, installed_version, create_uid, write_uid, create_date, write_date) VALUES ('$technical_name', 'uninstalled', NULL, NULL, 1, 1, NOW(), NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || true
+            run_target_db_sql "INSERT INTO ir_module_module (name, state, latest_version, installed_version, create_uid, write_uid, create_date, write_date) VALUES ('$escaped_name', 'uninstalled', NULL, NULL, 1, 1, NOW(), NOW()) ON CONFLICT (name) DO NOTHING;" 2>/dev/null || true
             (( updated++ ))
             log_info "  Registered new module: $technical_name"
         else
-            state="$(run_target_db_scalar "SELECT state FROM ir_module_module WHERE name = '$technical_name';" 2>/dev/null || echo "unknown")"
+            state="$(run_target_db_scalar "SELECT state FROM ir_module_module WHERE name = '$escaped_name';" 2>/dev/null || echo "unknown")"
             if [[ "$state" == "installed" ]]; then
                 (( already_installed++ ))
             else

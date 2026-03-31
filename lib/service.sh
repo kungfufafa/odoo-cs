@@ -102,14 +102,15 @@ run_odoo_shell_script() {
 
   prepare_odoo_runtime
   odoo_conf="${ODOO_CONF:-$ROOT/odoo.conf}"
+  [[ -f "$odoo_conf" ]] || log_fatal "odoo.conf not found at $odoo_conf — run bootstrap first"
 
   if [[ -n "${ODOO_BIN:-}" ]]; then
-    "$ODOO_BIN" shell -c "$odoo_conf" -d "$db_name" <"$script_file"
+    "$ODOO_BIN" shell -c "$odoo_conf" -d "$db_name" --no-http <"$script_file"
     return $?
   fi
 
   [[ -n "${ODOO_SRC_DIR:-}" ]] || log_fatal "ODOO_SRC_DIR not set"
-  "$VENV_DIR/bin/python" "$ODOO_SRC_DIR/setup/odoo" shell -c "$odoo_conf" -d "$db_name" <"$script_file"
+  "$VENV_DIR/bin/python" "$ODOO_SRC_DIR/setup/odoo" shell -c "$odoo_conf" -d "$db_name" --no-http <"$script_file"
 }
 
 # Start Odoo as a detached background process.

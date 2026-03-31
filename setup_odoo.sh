@@ -244,6 +244,7 @@ Usage:
   ./setup_odoo.sh status
   ./setup_odoo.sh logs
   ./setup_odoo.sh stop
+  ./setup_odoo.sh uninstall [--yes]
   ./setup_odoo.sh --version
   ./setup_odoo.sh help
 
@@ -256,6 +257,8 @@ Commands:
   status      Show bootstrap/Odoo PID and port status.
   logs        Follow bootstrap log.
   stop        Stop only the Odoo/bootstrap PIDs created by this script.
+  uninstall   Remove everything: stop services, drop database, remove files.
+              Use --yes to skip confirmation prompt.
   --version   Show script version and exit.
 
 Environment overrides:
@@ -556,7 +559,13 @@ _find_fetch_start_files() {
 
 _artifact_size_kb() {
   local file="$1"
-  printf '%s\n' "$(( ($(stat -f '%z' "$file" 2>/dev/null || stat -c '%s' "$file" 2>/dev/null || echo 0)) / 1024 ))"
+  local size_bytes=0
+
+  if [[ -f "$file" ]]; then
+    size_bytes="$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  fi
+  [[ "$size_bytes" =~ ^[0-9]+$ ]] || size_bytes=0
+  printf '%s\n' "$(( size_bytes / 1024 ))"
 }
 
 count_fetch_start_artifacts() {
@@ -759,13 +768,16 @@ download_drive_artifacts() {
 
   while (( attempt <= retries )); do
     log_info "downloading Odoo artifacts from Google Drive (attempt $attempt/$retries)"
+    local download_exit_code=0
     if bash "$ROOT/download_drive_folder.sh" run "$url"; then
       log_info "download completed successfully on attempt $attempt"
       _validate_downloaded_artifacts
       return 0
+    else
+      download_exit_code=$?
     fi
 
-    last_error="exit code $?"
+    last_error="exit code $download_exit_code"
     # Detect common gdown errors for better messages
     if [[ -f "$ROOT/.logs/drive-folder-download.log" ]]; then
       local log_tail
@@ -1016,6 +1028,338 @@ _post_deployment_validation() {
   fi
 }
 
+# ============================================================================
+# Uninstall / Clean Removal
+# ============================================================================
+
+# Completely uninstall Odoo CS: stop services, drop database, remove all files.
+# Arguments: [--yes] to skip interactive confirmation
+uninstall_odoo() {
+  local auto_yes=0
+  if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
+    auto_yes=1
+  fi
+
+  detect_platform
+
+  log_info "╔══════════════════════════════════════════════════════════════════╗"
+  log_info "║              ODOO CS — COMPLETE UNINSTALL                        ║"
+  log_info "╚══════════════════════════════════════════════════════════════════╝"
+  log_info ""
+  log_info "  This will remove:"
+  log_info "    • Odoo process and systemd service (odoo-cs)"
+  log_info "    • Database: $DB_NAME"
+  log_info "    • Database role: $DB_USER"
+  log_info "    • Data directory: $DATA_DIR"
+  log_info "    • Virtualenv: $VENV_DIR"
+  log_info "    • Config, logs, secrets, and runtime files"
+  log_info "    • Downloaded artifacts (.downloads/, .artifacts/)"
+  log_info "    • Odoo deb package (if installed)"
+  log_info ""
+
+  if (( ! auto_yes )); then
+    log_warn "  ⚠️  THIS ACTION IS IRREVERSIBLE!"
+    printf '\n  Type "UNINSTALL" to confirm: ' >&2
+    local confirmation
+    read -r confirmation
+    if [[ "$confirmation" != "UNINSTALL" ]]; then
+      log_info "Uninstall cancelled."
+      return 0
+    fi
+  fi
+
+  log_info ""
+  local step=0
+
+  # 1. Stop Odoo processes
+  (( step++ ))
+  log_info "  [$step] Stopping Odoo processes..."
+  local pid
+  pid="$(read_pid_file "$ODOO_PID_FILE" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && pid_is_running "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    sleep 2
+    kill -9 "$pid" 2>/dev/null || true
+    log_info "    Stopped Odoo process: $pid"
+  fi
+  pid="$(read_pid_file "$BOOTSTRAP_PID_FILE" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && pid_is_running "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    log_info "    Stopped bootstrap process: $pid"
+  fi
+
+  # 2. Remove systemd service
+  (( step++ ))
+  log_info "  [$step] Removing systemd service..."
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop odoo-cs 2>/dev/null || true
+    systemctl disable odoo-cs 2>/dev/null || true
+    rm -f /etc/systemd/system/odoo-cs.service
+    systemctl daemon-reload 2>/dev/null || true
+    log_info "    Removed odoo-cs.service"
+  else
+    log_info "    systemd not available — skipped"
+  fi
+
+  # 3. Drop database
+  (( step++ ))
+  log_info "  [$step] Dropping database: $DB_NAME..."
+  if command -v psql >/dev/null 2>&1; then
+    # Load secrets to get DB_PASSWORD
+    if [[ -f "$SECRETS_ENV_FILE" ]]; then
+      # shellcheck disable=SC1090
+      source "$SECRETS_ENV_FILE" 2>/dev/null || true
+    fi
+
+    # Validate DB_NAME looks like a real identifier (no SQL injection)
+    if ! [[ "$DB_NAME" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      log_warn "    DB_NAME='$DB_NAME' contains special chars — using quoted identifier"
+    fi
+    local db_ident
+    db_ident="$(sql_quote_ident "$DB_NAME")"
+    local db_lit
+    db_lit="$(sql_escape_literal "$DB_NAME")"
+
+    # Terminate active connections first
+    if [[ -n "${DB_ADMIN_PASSWORD:-}" ]]; then
+      PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -Atqc \
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db_lit' AND pid <> pg_backend_pid();" 2>/dev/null || true
+      PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -Atqc \
+        "DROP DATABASE IF EXISTS $db_ident;" 2>/dev/null && log_info "    Dropped database: $DB_NAME" || log_warn "    Could not drop database (may need manual: DROP DATABASE $db_ident;)"
+    elif db_host_is_local 2>/dev/null && command -v sudo >/dev/null 2>&1; then
+      sudo -u "$DB_ADMIN_USER" psql -d postgres -Atqc \
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db_lit' AND pid <> pg_backend_pid();" 2>/dev/null || true
+      sudo -u "$DB_ADMIN_USER" psql -d postgres -Atqc \
+        "DROP DATABASE IF EXISTS $db_ident;" 2>/dev/null && log_info "    Dropped database: $DB_NAME" || log_warn "    Could not drop database"
+    else
+      log_warn "    Cannot connect as admin — drop database manually: DROP DATABASE $db_ident;"
+    fi
+  fi
+
+  # 4. Drop database role
+  (( step++ ))
+  log_info "  [$step] Dropping database role: $DB_USER..."
+  if command -v psql >/dev/null 2>&1; then
+    local user_ident
+    user_ident="$(sql_quote_ident "$DB_USER")"
+    if [[ -n "${DB_ADMIN_PASSWORD:-}" ]]; then
+      PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -Atqc \
+        "DROP ROLE IF EXISTS $user_ident;" 2>/dev/null && log_info "    Dropped role: $DB_USER" || log_warn "    Could not drop role"
+    elif db_host_is_local 2>/dev/null && command -v sudo >/dev/null 2>&1; then
+      sudo -u "$DB_ADMIN_USER" psql -d postgres -Atqc \
+        "DROP ROLE IF EXISTS $user_ident;" 2>/dev/null && log_info "    Dropped role: $DB_USER" || log_warn "    Could not drop role"
+    fi
+  fi
+
+  # 5. Remove Odoo deb package
+  (( step++ ))
+  log_info "  [$step] Removing Odoo deb package..."
+  if dpkg -l odoo 2>/dev/null | grep -q '^ii'; then
+    if command -v apt-get >/dev/null 2>&1; then
+      run_privileged apt-get remove -y odoo 2>/dev/null || true
+      log_info "    Removed odoo deb package"
+    fi
+  else
+    log_info "    No odoo deb package installed — skipped"
+  fi
+
+  # 6. Remove service user (only if we created it)
+  (( step++ ))
+  local service_user="${ODOO_SERVICE_USER:-odoo}"
+  log_info "  [$step] Removing service user: $service_user..."
+  if id "$service_user" >/dev/null 2>&1; then
+    if command -v userdel >/dev/null 2>&1; then
+      userdel "$service_user" 2>/dev/null || true
+      log_info "    Removed user: $service_user"
+    fi
+  else
+    log_info "    User $service_user does not exist — skipped"
+  fi
+
+  # 7. Remove data directories and generated files
+  (( step++ ))
+  log_info "  [$step] Removing data and generated files..."
+  local items_removed=0
+  local dirs_to_remove=(
+    "$DATA_DIR"
+    "$VENV_DIR"
+    "$ROOT/.venv-drive-fetch"
+    "$ROOT/.downloads"
+    "$ARTIFACTS_DIR"
+    "$RESTORE_WORKDIR"
+    "$ROOT/.logs"
+    "$ROOT/.run"
+    "$ROOT/.rollback"
+    "$ROOT/.local"
+    "$LOCK_DIR"
+  )
+  for dir in "${dirs_to_remove[@]}"; do
+    if [[ -d "$dir" ]]; then
+      rm -rf "$dir"
+      (( items_removed++ ))
+    fi
+  done
+
+  local files_to_remove=(
+    "$ROOT/odoo.conf"
+    "$SECRETS_ENV_FILE"
+    "$RUNTIME_ENV_FILE"
+    "$ROOT/.odoo.secrets.ps1"
+    "$ROOT/.odoo_runtime.ps1"
+    "$LOG_FILE"
+    "$ODOO_STDOUT_LOG"
+    "$ODOO_PID_FILE"
+    "$BOOTSTRAP_PID_FILE"
+    "$BOOTSTRAP_LOG"
+    "$ROOT/.env"
+  )
+  for file in "${files_to_remove[@]}"; do
+    if [[ -f "$file" ]]; then
+      rm -f "$file"
+      (( items_removed++ ))
+    fi
+  done
+
+  # Remove downloaded artifacts (tar.gz, deb, exe, zip, sql dumps)
+  find "$ROOT" -maxdepth 2 -type f \( \
+    -name 'odoo*.tar.gz' -o -name 'odoo*.deb' -o -name 'odoo*.exe' \
+    -o -name 'dump.sql' -o -name '*.dump' -o -name '*.backup' \
+    -o -name '*.bak' -o -name '*.bak[0-9]' \
+  \) ! -name 'setup_odoo.sh' ! -name 'download_drive_folder.sh' -delete 2>/dev/null || true
+
+  # Remove extracted addons zip files
+  find "$ROOT" -maxdepth 2 -type f -name '*.zip' \
+    ! -name 'setup_odoo.sh' ! -name 'download_drive_folder.sh' -delete 2>/dev/null || true
+
+  # Remove ROOT-level extracted custom addons directories
+  # (directories containing __manifest__.py that aren't part of the repo itself)
+  local protected_dirs="lib|tests|.git|.github|.agents|.agent|_agents|_agent"
+  local addons_dir
+  while IFS= read -r addons_dir; do
+    local dir_name
+    dir_name="$(basename "$addons_dir")"
+    # Skip protected repo directories
+    if [[ "$dir_name" =~ ^($protected_dirs)$ ]]; then
+      continue
+    fi
+    if find "$addons_dir" -maxdepth 2 -name '__manifest__.py' 2>/dev/null | grep -q .; then
+      log_info "    Removing extracted addons dir: $addons_dir"
+      rm -rf "$addons_dir"
+      (( items_removed++ ))
+    fi
+  done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+
+  log_info "    Removed $items_removed directories/files"
+
+  # 8. Close firewall port
+  (( step++ ))
+  local port="${ODOO_HTTP_PORT:-8069}"
+  log_info "  [$step] Closing firewall port $port..."
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'active'; then
+    ufw delete allow "$port/tcp" 2>/dev/null || true
+    log_info "    Closed port $port via ufw"
+  elif command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --permanent --remove-port="$port/tcp" 2>/dev/null || true
+    firewall-cmd --reload 2>/dev/null || true
+  fi
+
+  # 9. Revert pg_hba.conf changes
+  (( step++ ))
+  log_info "  [$step] Reverting pg_hba.conf changes..."
+  if [[ "$OS_FAMILY" == "linux" ]]; then
+    local pg_hba=""
+    local pg_version_dir
+    for pg_version_dir in /etc/postgresql/*/main; do
+      [[ -d "$pg_version_dir" ]] || continue
+      pg_hba="$pg_version_dir/pg_hba.conf"
+      [[ -f "$pg_hba" ]] && break
+      pg_hba=""
+    done
+    if [[ -n "$pg_hba" ]]; then
+      # Remove the lines we added (marked with our comment)
+      if grep -q 'Added by setup_odoo.sh' "$pg_hba" 2>/dev/null; then
+        run_privileged sed -i '/# Added by setup_odoo.sh/d' "$pg_hba" 2>/dev/null || true
+        # Also remove the md5 lines that follow our comment
+        run_privileged sed -i '/^host[[:space:]]\+all[[:space:]]\+all[[:space:]]\+127\.0\.0\.1\/32[[:space:]]\+md5$/d' "$pg_hba" 2>/dev/null || true
+        run_privileged sed -i '/^host[[:space:]]\+all[[:space:]]\+all[[:space:]]\+::1\/128[[:space:]]\+md5$/d' "$pg_hba" 2>/dev/null || true
+        log_info "    Reverted pg_hba.conf entries"
+        # Reload PostgreSQL if it's still running
+        if systemctl is-active postgresql >/dev/null 2>&1; then
+          run_privileged systemctl reload postgresql 2>/dev/null || true
+          log_info "    Reloaded PostgreSQL"
+        fi
+      else
+        log_info "    No setup_odoo.sh entries found in pg_hba.conf — skipped"
+      fi
+    else
+      log_info "    pg_hba.conf not found — skipped"
+    fi
+  fi
+
+  # 10. Uninstall pip packages installed by setup
+  (( step++ ))
+  log_info "  [$step] Uninstalling pip packages..."
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m pip uninstall -y lxml_html_clean 2>/dev/null && \
+      log_info "    Removed lxml_html_clean" || true
+  fi
+  if [[ -x /usr/bin/python3 ]]; then
+    /usr/bin/python3 -m pip uninstall -y lxml_html_clean 2>/dev/null || true
+  fi
+  # Remove python3-lxml-html-clean apt package if installed
+  if dpkg -l python3-lxml-html-clean 2>/dev/null | grep -q '^ii'; then
+    run_privileged apt-get remove -y python3-lxml-html-clean 2>/dev/null || true
+    log_info "    Removed python3-lxml-html-clean apt package"
+  fi
+
+  # 11. Remove system packages installed by setup
+  (( step++ ))
+  log_info "  [$step] Removing system packages installed by setup..."
+  if command -v apt-get >/dev/null 2>&1; then
+    # Only remove packages that are specific to Odoo and unlikely to be needed by other services
+    # We do NOT remove postgresql, python3, curl, git, etc. as they are commonly used
+    local odoo_specific_pkgs=(
+      wkhtmltopdf
+      libldap2-dev
+      libsasl2-dev
+    )
+    local pkgs_to_remove=()
+    local pkg
+    for pkg in "${odoo_specific_pkgs[@]}"; do
+      if dpkg -l "$pkg" 2>/dev/null | grep -q '^ii'; then
+        pkgs_to_remove+=("$pkg")
+      fi
+    done
+    if (( ${#pkgs_to_remove[@]} > 0 )); then
+      run_privileged apt-get remove -y "${pkgs_to_remove[@]}" 2>/dev/null || true
+      run_privileged apt-get autoremove -y 2>/dev/null || true
+      log_info "    Removed: ${pkgs_to_remove[*]}"
+    else
+      log_info "    No Odoo-specific packages to remove"
+    fi
+  fi
+
+  log_info ""
+  log_info "╔══════════════════════════════════════════════════════════════════╗"
+  log_info "║              UNINSTALL COMPLETE                                  ║"
+  log_info "╚══════════════════════════════════════════════════════════════════╝"
+  log_info ""
+  log_info "  ✅ Odoo CS telah dihapus sepenuhnya."
+  log_info ""
+  log_info "  Yang tersisa (sengaja tidak dihapus):"
+  log_info "    • Repository odoo-cs ini (setup_odoo.sh, lib/, tests/, dll)"
+  log_info "    • PostgreSQL server (shared — bisa dipakai service lain)"
+  log_info "    • Core system packages (python3, curl, git, build-essential)"
+  log_info ""
+  log_info "  Untuk hapus total termasuk repo:"
+  log_info "    cd .. && rm -rf odoo-cs"
+  log_info ""
+  log_info "  Untuk hapus PostgreSQL juga:"
+  log_info "    sudo apt-get remove --purge -y postgresql postgresql-contrib"
+  log_info "    sudo apt-get autoremove -y"
+  log_info ""
+}
+
 fetch_start() {
   local url="${1:-}"
 
@@ -1122,6 +1466,9 @@ case "$CMD" in
     ;;
   stop)
     stop_background
+    ;;
+  uninstall)
+    uninstall_odoo "$@"
     ;;
   --version|-V)
     printf 'setup_odoo.sh v%s\n' "$SETUP_ODOO_VERSION"

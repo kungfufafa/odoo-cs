@@ -134,6 +134,21 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 PY
 }
 
+file_size_bytes() {
+  local file="$1"
+  local size=""
+
+  if [[ -f "$file" ]]; then
+    size="$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+
+  if [[ "$size" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$size"
+  else
+    printf '0\n'
+  fi
+}
+
 should_extract_archive() {
   local archive="$1"
   local entries
@@ -178,7 +193,7 @@ materialize_downloads_into_root() {
 
   while IFS= read -r -d '' file; do
     # Skip zero-byte files (likely incomplete downloads)
-    file_size=$(stat -f '%z' "$file" 2>/dev/null || stat -c '%s' "$file" 2>/dev/null || echo 0)
+    file_size="$(file_size_bytes "$file")"
     if (( file_size == 0 )); then
       log "WARNING: skipping zero-byte file (possibly incomplete download): $file"
       continue

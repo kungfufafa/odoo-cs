@@ -289,10 +289,17 @@ restore_payload_into_database() {
       require_cmd psql
       log_info "restoring plain SQL dump into $target_db: $restore_file"
       # Try strict mode first; if it fails (common with production dumps that
-      # have CREATE ROLE, ALTER OWNER, etc.), retry in tolerant mode.
+      # have CREATE ROLE, ALTER OWNER, etc.), drop the partially restored DB,
+      # recreate it, and retry in tolerant mode.
       if ! run_restore_command_logged "psql-strict" env PGPASSWORD="$DB_PASSWORD" \
         psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -f "$restore_file" 2>/dev/null; then
-        log_warn "strict SQL restore failed (likely role/owner mismatch) — retrying in tolerant mode"
+        log_warn "strict SQL restore failed (likely role/owner mismatch) — resetting DB and retrying in tolerant mode"
+        # Reset: drop and recreate the target database to avoid mixed state
+        PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -Atqc \
+          "DROP DATABASE IF EXISTS \"$target_db\";" 2>/dev/null || true
+        PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -Atqc \
+          "CREATE DATABASE \"$target_db\" OWNER \"$DB_USER\";" 2>/dev/null || \
+          log_fatal "could not recreate database $target_db for tolerant retry"
         run_restore_command_logged "psql-tolerant" env PGPASSWORD="$DB_PASSWORD" \
           psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -f "$restore_file" || \
           log_fatal "plain SQL restore failed for $restore_file"
