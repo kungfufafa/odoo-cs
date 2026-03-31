@@ -229,6 +229,23 @@ EOF
   grep -q -- "-h 127.0.0.1" "$ROOT/psql-args.txt"
 }
 
+@test "run_target_psql connects to the restored application database" {
+  export PATH="$MOCK_BIN:$PATH"
+  export DB_NAME="restored_db"
+  cat > "$MOCK_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$ROOT/target-psql-args.txt"
+printf 'ok\n'
+EOF
+  chmod +x "$MOCK_BIN/psql"
+
+  run run_target_psql "SELECT 1;"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+  grep -q -- "-d restored_db" "$ROOT/target-psql-args.txt"
+}
+
 # --- DB connection retry ---------------------------------------------------
 
 @test "test_db_connection keeps the real error when sudo is unsupported" {

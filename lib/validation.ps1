@@ -33,6 +33,7 @@ function Test-AllInputs {
     if (-not (Test-ValidPort 'DB_PORT' $DbPort)) { $errors++ }
     if (-not (Test-ValidBoolean 'DB_ROLE_CAN_CREATEDB' $DbRoleCanCreatedb)) { $errors++ }
     if (-not (Test-ValidBoolean 'DB_ROLE_SUPERUSER' $DbRoleSuperuser)) { $errors++ }
+    if (-not (Test-ValidBoolean 'ODOO_EXPOSE_HTTP' $OdooExposeHttp)) { $errors++ }
     if (-not (Test-ValidBoolean 'ODOO_PROXY_MODE' $OdooProxyMode)) { $errors++ }
     if (-not (Test-ValidBoolean 'ODOO_LIST_DB' $OdooListDb)) { $errors++ }
     if (-not (Test-ValidEnum 'RESTORE_MODE' $RestoreMode @('required','auto','skip'))) { $errors++ }

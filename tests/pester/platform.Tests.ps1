@@ -50,4 +50,21 @@ Describe 'Platform Module' {
             Test-IsInternalWorkspacePath 'C:\Odoo\setup_odoo.ps1' | Should -Be $false
         }
     }
+
+    Context 'Get-FirstFile' {
+        BeforeEach {
+            $script:Root = Join-Path $TestDrive 'workspace'
+            $script:RestoreWorkDir = Join-Path $script:Root '.restore'
+            $script:ArtifactsDir = Join-Path $script:Root '.artifacts'
+            New-Item -ItemType Directory -Force -Path $script:Root | Out-Null
+            New-Item -ItemType Directory -Force -Path (Join-Path $script:Root 'drive-bundle\releases') | Out-Null
+        }
+
+        It 'finds matching file in nested user directory' {
+            $filePath = Join-Path $script:Root 'drive-bundle\releases\odoo-enterprise.exe'
+            New-Item -ItemType File -Force -Path $filePath | Out-Null
+
+            Get-FirstFile 'odoo*.exe' | Should -Be $filePath
+        }
+    }
 }

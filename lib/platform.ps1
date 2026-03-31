@@ -81,7 +81,9 @@ function Show-MemoryHint {
 
 function Get-FirstFile {
     param([string]$Pattern)
-    $file = Get-ChildItem -Path $Root -Filter $Pattern -File -ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -First 1
+    $file = Get-WorkspaceFilesRecursive -Path $Root -Filter $Pattern -MaxDepth 3 |
+        Sort-Object FullName |
+        Select-Object -First 1
     if ($file) { return $file.FullName }
     return $null
 }

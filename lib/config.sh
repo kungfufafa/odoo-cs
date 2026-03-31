@@ -108,7 +108,22 @@ write_odoo_conf() {
     addons_path="/usr/lib/python3/dist-packages/odoo/addons,$CUSTOM_ADDONS_DIR"
   fi
 
-  log_info "writing Odoo config to $ROOT/odoo.conf (workers=$workers)"
+  # --- Production security baseline ---
+  # Enforce list_db=False (prevent database listing attacks)
+  local security_list_db="$list_db"
+  if [[ "$security_list_db" == "True" ]]; then
+    log_warn "SECURITY: list_db=True is insecure in production — overriding to False"
+    security_list_db="False"
+  fi
+
+  # Enforce dbfilter if not set or too permissive
+  local security_dbfilter="$ODOO_DBFILTER"
+  if [[ -z "$security_dbfilter" || "$security_dbfilter" == "^.*$" ]]; then
+    security_dbfilter="^${DB_NAME}$"
+    log_warn "SECURITY: dbfilter was not set or too permissive — restricting to ^${DB_NAME}$"
+  fi
+
+  log_info "writing Odoo config to $ROOT/odoo.conf (workers=$workers, security: list_db=$security_list_db, dbfilter=$security_dbfilter)"
   cat >"$ROOT/odoo.conf" <<EOF
 [options]
 admin_passwd = $ODOO_ADMIN_PASSWD
@@ -116,7 +131,7 @@ db_host = $DB_HOST
 db_port = $DB_PORT
 db_user = $DB_USER
 db_password = $DB_PASSWORD
-dbfilter = $ODOO_DBFILTER
+dbfilter = $security_dbfilter
 addons_path = $addons_path
 data_dir = $DATA_DIR
 http_interface = $ODOO_HTTP_INTERFACE
@@ -124,7 +139,7 @@ http_port = $ODOO_HTTP_PORT
 gevent_port = $ODOO_GEVENT_PORT
 logfile = $LOG_FILE
 proxy_mode = $proxy_mode
-list_db = $list_db
+list_db = $security_list_db
 workers = $workers
 max_cron_threads = $ODOO_MAX_CRON_THREADS
 db_maxconn = $ODOO_DB_MAXCONN
@@ -133,8 +148,13 @@ limit_memory_hard = $memory_hard
 limit_time_cpu = $ODOO_LIMIT_TIME_CPU
 limit_time_real = $ODOO_LIMIT_TIME_REAL
 without_demo = $ODOO_WITHOUT_DEMO
+limit_request = 8192
+syslog = False
+log_db = False
+log_db_level = warning
 EOF
   chmod 600 "$ROOT/odoo.conf"
+  log_info "odoo.conf written with production security baseline applied"
 }
 
 # Write the runtime environment file for 'run' command to use later.
@@ -152,6 +172,7 @@ write_runtime_env() {
     printf "ODOO_DEPENDENCY_REPAIR_RETRIES=%q\n" "$ODOO_DEPENDENCY_REPAIR_RETRIES"
     printf "ODOO_DEPENDENCY_REPAIR_RETRY_DELAY=%q\n" "$ODOO_DEPENDENCY_REPAIR_RETRY_DELAY"
     printf "ODOO_HTTP_PORT=%q\n" "$ODOO_HTTP_PORT"
+    printf "ODOO_HTTP_INTERFACE=%q\n" "$ODOO_HTTP_INTERFACE"
     printf "ODOO_PID_FILE=%q\n" "$ODOO_PID_FILE"
     printf "DB_NAME=%q\n" "$DB_NAME"
   } >"$tmp"

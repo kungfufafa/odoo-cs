@@ -91,11 +91,33 @@ run_odoo() {
   exec "$VENV_DIR/bin/python" "$ODOO_SRC_DIR/setup/odoo" -c "$odoo_conf" "$@"
 }
 
+# Run an Odoo shell script against a database without replacing the current shell.
+# Arguments: $1=database name, $2=python script file path passed via stdin
+run_odoo_shell_script() {
+  local db_name="$1"
+  local script_file="$2"
+  local odoo_conf
+
+  [[ -f "$script_file" ]] || log_fatal "odoo shell script not found: $script_file"
+
+  prepare_odoo_runtime
+  odoo_conf="${ODOO_CONF:-$ROOT/odoo.conf}"
+
+  if [[ -n "${ODOO_BIN:-}" ]]; then
+    "$ODOO_BIN" shell -c "$odoo_conf" -d "$db_name" <"$script_file"
+    return $?
+  fi
+
+  [[ -n "${ODOO_SRC_DIR:-}" ]] || log_fatal "ODOO_SRC_DIR not set"
+  "$VENV_DIR/bin/python" "$ODOO_SRC_DIR/setup/odoo" shell -c "$odoo_conf" -d "$db_name" <"$script_file"
+}
+
 # Start Odoo as a detached background process.
 # Writes PID to ODOO_PID_FILE, redirects output to ODOO_STDOUT_LOG.
+# Includes crash-detection retry: if Odoo dies within 15 seconds, show log and retry once.
 # Arguments: passed through to Odoo via 'run' command
 start_odoo_detached() {
-  local pid
+  local pid max_retries=2 attempt=1
   ensure_dirs
   pid="$(read_pid_file "$ODOO_PID_FILE")"
   if pid_is_running "$pid"; then
@@ -103,11 +125,47 @@ start_odoo_detached() {
     return 0
   fi
 
-  : >"$ODOO_STDOUT_LOG"
-  nohup env ROOT="$ROOT" "$ROOT/setup_odoo.sh" run "$@" >>"$ODOO_STDOUT_LOG" 2>&1 &
-  echo "$!" >"$ODOO_PID_FILE"
-  log_info "started Odoo pid=$!"
-  log_info "stdout log=$ODOO_STDOUT_LOG"
+  while (( attempt <= max_retries )); do
+    : >"$ODOO_STDOUT_LOG"
+    nohup env ROOT="$ROOT" "$ROOT/setup_odoo.sh" run "$@" >>"$ODOO_STDOUT_LOG" 2>&1 &
+    echo "$!" >"$ODOO_PID_FILE"
+    local new_pid="$!"
+    log_info "started Odoo pid=$new_pid (attempt $attempt/$max_retries)"
+    log_info "stdout log=$ODOO_STDOUT_LOG"
+
+    # Wait briefly and check if process is still alive
+    sleep 5
+    if pid_is_running "$new_pid"; then
+      return 0
+    fi
+
+    log_warn "Odoo process $new_pid died within 5 seconds"
+
+    # Show last 20 lines of log for troubleshooting
+    if [[ -s "$ODOO_STDOUT_LOG" ]]; then
+      log_warn "=== Last 20 lines of Odoo stdout log ==="
+      tail -n 20 "$ODOO_STDOUT_LOG" | while IFS= read -r line; do
+        log_warn "  $line"
+      done
+      log_warn "=== End of log ==="
+    fi
+
+    if [[ -s "$LOG_FILE" ]]; then
+      log_warn "=== Last 20 lines of odoo.log ==="
+      tail -n 20 "$LOG_FILE" | while IFS= read -r line; do
+        log_warn "  $line"
+      done
+      log_warn "=== End of log ==="
+    fi
+
+    if (( attempt < max_retries )); then
+      log_warn "retrying Odoo start..."
+      sleep 3
+    fi
+    (( attempt++ ))
+  done
+
+  log_fatal "Odoo failed to start after $max_retries attempts — check logs: $ODOO_STDOUT_LOG and $LOG_FILE"
 }
 
 # Resolve the HTTP host to use for local healthchecks.
@@ -143,6 +201,7 @@ healthcheck_url() {
 }
 
 # Wait for Odoo to become healthy by polling the login page.
+# Validates both HTTP status AND response body to ensure Odoo is truly ready.
 # Also checks DB connectivity if psql is available.
 # Dies if healthcheck fails after HEALTHCHECK_TIMEOUT seconds.
 healthcheck_odoo() {
@@ -151,14 +210,69 @@ healthcheck_odoo() {
   deadline=$((SECONDS + HEALTHCHECK_TIMEOUT))
 
   log_info "waiting for Odoo healthcheck at $url (timeout: ${HEALTHCHECK_TIMEOUT}s)"
+
+  local last_error="" check_count=0
   while (( SECONDS < deadline )); do
-    if command -v curl >/dev/null 2>&1 && curl -fsS -o /dev/null "$url" 2>/dev/null; then
-      log_info "healthcheck passed: $url"
-      return 0
+    (( check_count++ ))
+
+    # Check if Odoo process is still alive
+    local odoo_pid
+    odoo_pid="$(read_pid_file "$ODOO_PID_FILE")"
+    if [[ -n "$odoo_pid" ]] && ! pid_is_running "$odoo_pid"; then
+      log_error "Odoo process $odoo_pid is no longer running"
+      if [[ -s "$LOG_FILE" ]]; then
+        log_error "Last 10 lines of odoo.log:"
+        tail -n 10 "$LOG_FILE" | while IFS= read -r line; do log_error "  $line"; done
+      fi
+      log_fatal "Odoo process died during healthcheck — check logs: $LOG_FILE"
     fi
+
+    if command -v curl >/dev/null 2>&1; then
+      local http_code response_file
+      response_file="$(mktemp 2>/dev/null || echo /tmp/odoo_hc_$$)"
+      http_code="$(curl -fsS -o "$response_file" -w '%{http_code}' --max-time 10 --connect-timeout 5 "$url" 2>/dev/null || true)"
+
+      case "$http_code" in
+        200|302|303|304)
+          # Verify there's actual content (not an empty/error page)
+          local body_size=0
+          if [[ -f "$response_file" ]]; then
+            body_size=$(wc -c < "$response_file" | tr -d ' ')
+          fi
+
+          if (( body_size > 100 )); then
+            log_info "healthcheck passed: $url (HTTP $http_code, ${body_size} bytes) ✓"
+            rm -f "$response_file"
+            return 0
+          else
+            last_error="HTTP $http_code but response too small (${body_size} bytes)"
+          fi
+          ;;
+        502|503|504)
+          last_error="HTTP $http_code (service starting up)"
+          ;;
+        *)
+          last_error="HTTP $http_code"
+          ;;
+      esac
+      rm -f "$response_file"
+    elif command -v wget >/dev/null 2>&1; then
+      if wget -q --spider --timeout=10 "$url" 2>/dev/null; then
+        log_info "healthcheck passed: $url ✓"
+        return 0
+      fi
+      last_error="wget failed"
+    fi
+
+    # Log progress every 30 seconds
+    if (( check_count % 15 == 0 )); then
+      local remaining=$(( deadline - SECONDS ))
+      log_info "healthcheck still waiting... (${remaining}s remaining, last: $last_error)"
+    fi
+
     sleep 2
   done
-  log_fatal "healthcheck failed after ${HEALTHCHECK_TIMEOUT}s: $url"
+  log_fatal "healthcheck failed after ${HEALTHCHECK_TIMEOUT}s: $url (last: $last_error) — check logs: $LOG_FILE"
 }
 
 # Stop a process by its PID file with graceful shutdown.
@@ -239,6 +353,9 @@ status_background() {
 
 # Stop both Odoo and bootstrap processes.
 stop_background() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop odoo-cs 2>/dev/null || true
+  fi
   stop_pid_file "$ODOO_PID_FILE" "odoo"
   stop_pid_file "$BOOTSTRAP_PID_FILE" "bootstrap"
 }

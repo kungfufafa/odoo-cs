@@ -14,6 +14,7 @@ PID_FILE="${PID_FILE:-$ROOT/.run/drive-folder-download.pid}"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv-drive-fetch}"
 SESSION_NAME="${SESSION_NAME:-drive_fetch_gdrive}"
 EXTRACT_MODE="${EXTRACT_MODE:-smart}"
+GDOWN_TIMEOUT="${GDOWN_TIMEOUT:-0}"
 
 log() {
   printf '[%s] [drive-fetch] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2
@@ -173,9 +174,16 @@ should_extract_archive() {
 }
 
 materialize_downloads_into_root() {
-  local file relative_path destination
+  local file relative_path destination file_size
 
   while IFS= read -r -d '' file; do
+    # Skip zero-byte files (likely incomplete downloads)
+    file_size=$(stat -f '%z' "$file" 2>/dev/null || stat -c '%s' "$file" 2>/dev/null || echo 0)
+    if (( file_size == 0 )); then
+      log "WARNING: skipping zero-byte file (possibly incomplete download): $file"
+      continue
+    fi
+
     relative_path="${file#$DOWNLOAD_DIR/}"
     destination="$ROOT/$relative_path"
     mkdir -p "$(dirname "$destination")"
@@ -189,10 +197,10 @@ materialize_downloads_into_root() {
     fi
 
     if ln "$file" "$destination" 2>/dev/null; then
-      log "linked downloaded file into root: $destination"
+      log "linked downloaded file into root: $destination (${file_size} bytes)"
     else
       cp -f "$file" "$destination"
-      log "copied downloaded file into root: $destination"
+      log "copied downloaded file into root: $destination (${file_size} bytes)"
     fi
   done < <(find "$DOWNLOAD_DIR" -type f ! -name '*.part' ! -name '*.part.*' -print0)
 }
@@ -279,9 +287,65 @@ run_download() {
   ensure_dirs
   gdown_bin="$(resolve_gdown_command)"
 
+  # Validate the download directory is usable
+  if [[ ! -d "$DOWNLOAD_DIR" ]]; then
+    log "creating download directory: $DOWNLOAD_DIR"
+    mkdir -p "$DOWNLOAD_DIR" || {
+      log "FATAL: cannot create download directory: $DOWNLOAD_DIR"
+      return 1
+    }
+  fi
+
+  # Check write permission
+  if ! touch "$DOWNLOAD_DIR/.write_test" 2>/dev/null; then
+    log "FATAL: download directory is not writable: $DOWNLOAD_DIR"
+    return 1
+  fi
+  rm -f "$DOWNLOAD_DIR/.write_test"
+
   log "downloading Google Drive folder into $DOWNLOAD_DIR"
-  "$gdown_bin" --folder --remaining-ok "$url" -O "$DOWNLOAD_DIR"
-  log "download complete; materializing files into $ROOT"
+
+  # Run gdown with optional timeout
+  local gdown_args=(--folder --remaining-ok "$url" -O "$DOWNLOAD_DIR")
+  local gdown_exit_code=0
+
+  if (( GDOWN_TIMEOUT > 0 )); then
+    log "download timeout set to ${GDOWN_TIMEOUT}s"
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$GDOWN_TIMEOUT" "$gdown_bin" "${gdown_args[@]}" || gdown_exit_code=$?
+    elif command -v gtimeout >/dev/null 2>&1; then
+      gtimeout "$GDOWN_TIMEOUT" "$gdown_bin" "${gdown_args[@]}" || gdown_exit_code=$?
+    else
+      log "WARN: timeout command not available, running without time limit"
+      "$gdown_bin" "${gdown_args[@]}" || gdown_exit_code=$?
+    fi
+  else
+    "$gdown_bin" "${gdown_args[@]}" || gdown_exit_code=$?
+  fi
+
+  if (( gdown_exit_code != 0 )); then
+    log "gdown exited with code $gdown_exit_code"
+    # Check if any files were actually downloaded despite the error
+    local downloaded_count
+    downloaded_count="$(find "$DOWNLOAD_DIR" -type f ! -name '*.part' ! -name '*.part.*' 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "$downloaded_count" =~ ^[0-9]+$ ]] && (( downloaded_count > 0 )); then
+      log "WARN: gdown reported errors but $downloaded_count file(s) were downloaded — proceeding"
+    else
+      log "FATAL: download failed and no files were retrieved"
+      return 1
+    fi
+  fi
+
+  # Validate that at least some files were downloaded
+  local file_count
+  file_count="$(find "$DOWNLOAD_DIR" -type f ! -name '*.part' ! -name '*.part.*' 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$file_count" =~ ^[0-9]+$ ]] && (( file_count == 0 )); then
+    log "FATAL: no files found in download directory after download — Google Drive folder may be empty or access denied"
+    return 1
+  fi
+  log "downloaded $file_count file(s) into $DOWNLOAD_DIR"
+
+  log "materializing files into $ROOT"
   materialize_downloads_into_root
   log "materialization complete; starting archive extraction into $EXTRACT_ROOT"
   extract_downloads

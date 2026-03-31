@@ -24,6 +24,7 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage:"* ]]
   [[ "$output" == *"Commands:"* ]]
+  [[ "$output" == *"fetch-start"* ]]
 }
 
 @test "setup_odoo.sh --help prints usage" {
@@ -85,6 +86,7 @@ teardown() {
   [ -f "$PROJECT_ROOT/lib/config.sh" ]
   [ -f "$PROJECT_ROOT/lib/service.sh" ]
   [ -f "$PROJECT_ROOT/lib/rollback.sh" ]
+  [ -f "$PROJECT_ROOT/lib/post_restore_hook.sh" ]
 }
 
 @test "_bootstrap.sh loads without error" {
@@ -117,6 +119,11 @@ teardown() {
   [[ "$output" == *"LOG_LEVEL"* ]]
 }
 
+@test "usage output lists ODOO_EXPOSE_HTTP" {
+  run env ROOT="$PROJECT_ROOT" bash "$PROJECT_ROOT/setup_odoo.sh" help
+  [[ "$output" == *"ODOO_EXPOSE_HTTP"* ]]
+}
+
 @test "usage output does not list DRY_RUN" {
   run env ROOT="$PROJECT_ROOT" bash "$PROJECT_ROOT/setup_odoo.sh" help
   [[ "$output" != *"DRY_RUN"* ]]
@@ -125,4 +132,28 @@ teardown() {
 @test ".env.example does not list DRY_RUN" {
   run grep -En '^[[:space:]]*#?[[:space:]]*DRY_RUN=' "$PROJECT_ROOT/.env.example"
   [ "$status" -ne 0 ]
+}
+
+@test ".env.example lists ODOO_EXPOSE_HTTP" {
+  run grep -En '^[[:space:]]*ODOO_EXPOSE_HTTP=' "$PROJECT_ROOT/.env.example"
+  [ "$status" -eq 0 ]
+}
+
+@test "load_env_file strips inline comments from example-style .env values" {
+  eval "$(sed -n '/^trim_env_field()/,/^load_env_file "\$ENV_FILE"$/p' "$PROJECT_ROOT/setup_odoo.sh" | sed '$d')"
+
+  cat >"$ROOT/.env.test" <<'EOF'
+ODOO_EXPOSE_HTTP=0                # 0 or 1
+ODOO_WORKERS=auto                 # Integer or 'auto'
+VALUE_WITH_HASH=abc#123
+QUOTED_VALUE="0 # keep"
+EOF
+
+  unset ODOO_EXPOSE_HTTP ODOO_WORKERS VALUE_WITH_HASH QUOTED_VALUE
+  load_env_file "$ROOT/.env.test"
+
+  [ "$ODOO_EXPOSE_HTTP" = "0" ]
+  [ "$ODOO_WORKERS" = "auto" ]
+  [ "$VALUE_WITH_HASH" = "abc#123" ]
+  [ "$QUOTED_VALUE" = "0 # keep" ]
 }

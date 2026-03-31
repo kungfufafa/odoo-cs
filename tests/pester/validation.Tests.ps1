@@ -59,6 +59,7 @@ Describe 'Validation Module' {
             $script:DbPort = '5432'
             $script:DbRoleCanCreatedb = 1
             $script:DbRoleSuperuser = 0
+            $script:OdooExposeHttp = 0
             $script:OdooProxyMode = 1
             $script:OdooListDb = 0
             $script:RestoreMode = 'required'
@@ -77,6 +78,11 @@ Describe 'Validation Module' {
 
         It 'throws error on invalid boolean' {
             $script:DbRoleCanCreatedb = 5
+            { Test-AllInputs } | Should -Throw
+        }
+
+        It 'throws error on invalid ODOO_EXPOSE_HTTP' {
+            $script:OdooExposeHttp = 2
             { Test-AllInputs } | Should -Throw
         }
 

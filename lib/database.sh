@@ -92,7 +92,7 @@ run_local_postgres_command() {
     if command -v su >/dev/null 2>&1; then
       local command_string
       printf -v command_string '%q ' "$@"
-      su -s /bin/sh postgres -c "$command_string"
+      su -s /bin/bash postgres -c "$command_string"
       return $?
     fi
     log_fatal "required command not found: runuser or su"
@@ -131,6 +131,17 @@ run_admin_psql() {
     tcp_host="$(resolve_tcp_db_admin_host)"
     PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h "$tcp_host" -p "$DB_PORT" -U "$DB_ADMIN_USER" -d postgres -v ON_ERROR_STOP=1 -Atqc "$sql"
   fi
+}
+
+# Execute a SQL statement against the restored application database.
+# Arguments: $1=SQL statement, $2=target database (optional, defaults to DB_NAME)
+# Output: query result on stdout
+run_target_psql() {
+  local sql="$1"
+  local target_db="${2:-$DB_NAME}"
+  require_cmd psql
+
+  PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -v ON_ERROR_STOP=1 -Atqc "$sql"
 }
 
 # Test database connectivity with retry logic.
@@ -296,13 +307,63 @@ END
   run_admin_psql "$sql" >/dev/null
 }
 
+# Ensure pg_hba.conf allows md5/scram-sha-256 authentication for TCP connections.
+# Without this, a fresh PostgreSQL install only has peer auth and will reject
+# password-based logins from Odoo.
+ensure_pg_hba_md5() {
+  [[ "$OS_FAMILY" == "linux" ]] || return 0
+  [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]] || return 0
+
+  local pg_hba pg_version_dir pg_version
+  local need_reload=0
+
+  # Find pg_hba.conf — try common paths
+  for pg_version_dir in /etc/postgresql/*/main; do
+    [[ -d "$pg_version_dir" ]] || continue
+    pg_hba="$pg_version_dir/pg_hba.conf"
+    [[ -f "$pg_hba" ]] && break
+    pg_hba=""
+  done
+
+  if [[ -z "${pg_hba:-}" ]]; then
+    log_debug "pg_hba.conf not found in standard locations, skipping auto-fix"
+    return 0
+  fi
+
+  log_debug "checking pg_hba.conf at $pg_hba"
+
+  # Check if there's already a host line for 127.0.0.1 with md5/scram-sha-256
+  if grep -Eq '^host[[:space:]]+all[[:space:]]+all[[:space:]]+127\.0\.0\.1/32[[:space:]]+(md5|scram-sha-256)' "$pg_hba" 2>/dev/null; then
+    log_debug "pg_hba.conf already has md5/scram-sha-256 for 127.0.0.1"
+    return 0
+  fi
+
+  log_info "Adding md5 auth entry to pg_hba.conf for TCP connections"
+  # Add before the first 'local' line to ensure it takes precedence
+  {
+    printf '# Added by setup_odoo.sh for Odoo TCP auth\n'
+    printf 'host    all             all             127.0.0.1/32            md5\n'
+    printf 'host    all             all             ::1/128                 md5\n'
+  } | run_privileged tee -a "$pg_hba" >/dev/null
+
+  need_reload=1
+
+  if (( need_reload )); then
+    log_info "Reloading PostgreSQL after pg_hba.conf update"
+    run_privileged systemctl reload postgresql 2>/dev/null || \
+    run_privileged systemctl restart postgresql 2>/dev/null || true
+  fi
+}
+
 # Ensure PostgreSQL is running on Linux systems.
-# On Ubuntu/Debian, enables and restarts the postgresql service.
+# On Ubuntu/Debian, enables and restarts the postgresql service,
+# then ensures pg_hba.conf allows md5 auth.
 ensure_postgres_running() {
   [[ "$OS_FAMILY" == "linux" ]] || return 0
   if [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]]; then
     log_info "starting PostgreSQL"
     run_privileged systemctl enable postgresql >/dev/null 2>&1 || true
     run_privileged systemctl restart postgresql
+    ensure_pg_hba_md5
   fi
 }

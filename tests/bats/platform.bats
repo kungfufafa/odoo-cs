@@ -132,3 +132,14 @@ teardown() {
   [ -n "$result" ]
   [[ "$result" == *"odoo_test.tar.gz" ]]
 }
+
+@test "pick_file finds matching file in nested user directory" {
+  mkdir -p "$ROOT/drive-bundle/releases"
+  touch "$ROOT/drive-bundle/releases/odoo_enterprise.tar.gz"
+
+  local result
+  result="$(pick_file 'odoo*.tar.gz')"
+
+  [ -n "$result" ]
+  [[ "$result" == *"drive-bundle/releases/odoo_enterprise.tar.gz" ]]
+}

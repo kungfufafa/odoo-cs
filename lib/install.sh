@@ -17,7 +17,7 @@ _INSTALL_SH_LOADED=1
 
 # Configurable glob patterns for custom addons zip files.
 # Pipe-separated list of patterns to match against filenames.
-CUSTOM_ADDONS_ZIP_PATTERNS="${CUSTOM_ADDONS_ZIP_PATTERNS:-*addons*.zip|majukendaraanlistrikindonesia-main.zip}"
+CUSTOM_ADDONS_ZIP_PATTERNS="${CUSTOM_ADDONS_ZIP_PATTERNS:-*addons*.zip}"
 
 # System packages required on Ubuntu/Debian for building Odoo from source.
 APT_PACKAGES=(
@@ -182,9 +182,21 @@ detect_custom_addons() {
   read -ra patterns_array <<< "$CUSTOM_ADDONS_ZIP_PATTERNS"
 
   for pattern in "${patterns_array[@]}"; do
-    candidate="$(find "$ROOT" -maxdepth 1 -type f -name "$pattern" | sort | head -n 1 || true)"
+    candidate="$(pick_file "$pattern")"
     [[ -n "$candidate" ]] && break
   done
+
+  # Fallback: sweep all remaining zip files and dynamically check contents
+  if [[ -z "${candidate:-}" ]]; then
+    while IFS= read -r zip_candidate; do
+      if zip_list_entries "$zip_candidate" 2>/dev/null | grep -Eq '(^|/)__manifest__\.py$'; then
+        candidate="$zip_candidate"
+        break
+      fi
+    done < <(find "$ROOT" -maxdepth 2 \
+      \( -path "$RESTORE_WORKDIR" -o -path "$ARTIFACTS_DIR" -o -path "$ROOT/.logs" -o -path "$ROOT/.run" -o -path "$ROOT/.rollback" -o -path "$ROOT/.local" -o -path "$ROOT/.venv" -o -path "$ROOT/.git" \) -prune -o \
+      -type f -name '*.zip' -print | sort)
+  fi
 
   if [[ -n "${candidate:-}" ]]; then
     extract_dir="$ARTIFACTS_DIR/$(basename "${candidate%.zip}")"

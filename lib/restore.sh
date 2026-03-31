@@ -125,6 +125,14 @@ find_restore_payload() {
     return 0
   fi
 
+  # Check for directory-format dump (pg_restore -Fd)
+  local dir_dump
+  dir_dump="$(find "$backup_dir" -maxdepth 2 -type f -name 'toc.dat' | sort | head -n 1 || true)"
+  if [[ -n "$dir_dump" ]]; then
+    printf 'directory|%s\n' "$(dirname "$dir_dump")"
+    return 0
+  fi
+
   return 1
 }
 
@@ -175,6 +183,94 @@ generate_restore_temp_db_name() {
   printf '%s%s\n' "$prefix" "$suffix"
 }
 
+_log_restore_output_tail() {
+  local label="$1"
+  local output_file="$2"
+
+  [[ -f "$output_file" ]] || return 0
+  tail -n 50 "$output_file" | while IFS= read -r line; do
+    log_debug "$label: $line"
+  done
+}
+
+run_restore_command_logged() {
+  local label="$1"
+  shift
+
+  local output_file exit_code=0
+  mkdir -p "$RESTORE_WORKDIR"
+  output_file="$(mktemp "${RESTORE_WORKDIR}/${label}.XXXXXX.log")"
+
+  if "$@" >"$output_file" 2>&1; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+
+  _log_restore_output_tail "$label" "$output_file"
+
+  if (( exit_code != 0 )); then
+    log_error "$label failed during restore with exit code $exit_code"
+    rm -f "$output_file"
+    return "$exit_code"
+  fi
+
+  rm -f "$output_file"
+}
+
+_warn_if_table_below_min_rows() {
+  local target_db="$1"
+  local table_name="$2"
+  local min_rows="$3"
+  local actual_rows
+
+  actual_rows="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -Atqc "SELECT COUNT(*) FROM $table_name;" 2>/dev/null | tr -d ' ' || echo "0")"
+  if [[ "$actual_rows" =~ ^[0-9]+$ ]] && (( actual_rows < min_rows )); then
+    log_warn "table $table_name has only $actual_rows records (expected at least $min_rows) — backup may be incomplete"
+  fi
+}
+
+# Validate that core Odoo tables exist after restore and have minimum record counts.
+# Arguments: $1=target database
+# Returns 0 if all critical tables exist and have data, 1 otherwise.
+_validate_core_tables_after_restore() {
+  local target_db="$1"
+  local core_tables="ir_module_module res_users ir_cron ir_config_parameter"
+  local table missing=0 empty_tables=0
+
+  for table in $core_tables; do
+    local result count
+    result="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -Atqc \
+      "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='$table');" 2>/dev/null || echo "f")"
+    if [[ "$result" != "t" ]]; then
+      log_error "core table missing after restore: $table"
+      (( missing++ ))
+      continue
+    fi
+    # Check record count (warn if suspiciously empty, but don't fail on all)
+    count="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -Atqc "SELECT COUNT(*) FROM $table;" 2>/dev/null | tr -d ' ' || echo "0")"
+    if [[ "$count" == "0" ]]; then
+      log_warn "core table $table exists but has 0 records"
+      (( empty_tables++ ))
+    fi
+  done
+
+  if (( missing > 0 )); then
+    log_error "restore validation failed: $missing core table(s) missing"
+    return 1
+  fi
+
+  # Verify minimum record counts for critical tables
+  _warn_if_table_below_min_rows "$target_db" "ir_module_module" 10
+  _warn_if_table_below_min_rows "$target_db" "res_users" 1
+
+  # Count total tables for verification
+  local total_tables
+  total_tables="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -Atqc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ' || echo "0")"
+  log_info "restore validation passed: all core tables present, $total_tables total tables, $empty_tables empty"
+  return 0
+}
+
 # Restore the selected dump payload into a specific database.
 # Arguments: $1=format (plain|custom), $2=restore file, $3=target database
 restore_payload_into_database() {
@@ -182,16 +278,50 @@ restore_payload_into_database() {
   local restore_file="$2"
   local target_db="$3"
 
+  # Detect actual format if labeled as "custom" but is actually a directory
+  if [[ "$format" == "custom" && -d "$restore_file" ]]; then
+    log_info "detected directory-format dump: $restore_file"
+    format="directory"
+  fi
+
   case "$format" in
     plain)
       require_cmd psql
       log_info "restoring plain SQL dump into $target_db: $restore_file"
-      PGPASSWORD="$DB_PASSWORD" psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -f "$restore_file"
+      # Try strict mode first; if it fails (common with production dumps that
+      # have CREATE ROLE, ALTER OWNER, etc.), retry in tolerant mode.
+      if ! run_restore_command_logged "psql-strict" env PGPASSWORD="$DB_PASSWORD" \
+        psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -f "$restore_file" 2>/dev/null; then
+        log_warn "strict SQL restore failed (likely role/owner mismatch) — retrying in tolerant mode"
+        run_restore_command_logged "psql-tolerant" env PGPASSWORD="$DB_PASSWORD" \
+          psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -f "$restore_file" || \
+          log_fatal "plain SQL restore failed for $restore_file"
+      fi
+
+      # Post-restore validation: ensure core tables exist
+      _validate_core_tables_after_restore "$target_db" || \
+        log_fatal "database restore appears to have failed — core Odoo tables are missing from $target_db"
       ;;
     custom)
       require_cmd pg_restore
       log_info "restoring PostgreSQL custom dump into $target_db: $restore_file"
-      PGPASSWORD="$DB_PASSWORD" pg_restore -v --no-owner --role="$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" "$restore_file"
+      # --no-owner/--no-privileges avoids common role/ACL mismatches.
+      # No --exit-on-error: pg_restore exit code 1 with warnings is acceptable
+      # for role/ACL mismatches. Core table validation catches real failures.
+      run_restore_command_logged "pg_restore" env PGPASSWORD="$DB_PASSWORD" \
+        pg_restore --no-owner --no-privileges --role="$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" "$restore_file" || true
+
+      _validate_core_tables_after_restore "$target_db" || \
+        log_fatal "database restore appears to have failed — core Odoo tables are missing from $target_db"
+      ;;
+    directory)
+      require_cmd pg_restore
+      log_info "restoring PostgreSQL directory-format dump into $target_db: $restore_file"
+      run_restore_command_logged "pg_restore" env PGPASSWORD="$DB_PASSWORD" \
+        pg_restore --no-owner --no-privileges --role="$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$target_db" -j 2 "$restore_file" || true
+
+      _validate_core_tables_after_restore "$target_db" || \
+        log_fatal "database restore appears to have failed — core Odoo tables are missing from $target_db"
       ;;
     *)
       log_fatal "unsupported restore format: $format"
@@ -288,5 +418,16 @@ restore_database() {
     mirror_filestore "$filestore_dir" "$target_filestore"
   else
     log_info "backup has no filestore content; restore completed without attachments"
+  fi
+
+  # Run post-restore hooks if available
+  if declare -f run_post_restore_hooks >/dev/null 2>&1; then
+    run_post_restore_hooks
+  fi
+
+  # Auto-cleanup extracted backup directory to reclaim disk space
+  if [[ -d "$backup_dir" && "$backup_dir" == "$RESTORE_WORKDIR/"* ]]; then
+    log_info "cleaning up extracted backup directory to save space: $backup_dir"
+    rm -rf "$backup_dir"
   fi
 }

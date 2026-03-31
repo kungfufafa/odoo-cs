@@ -2,7 +2,7 @@
 # ============================================================================
 # secrets.sh — Secure secret generation, persistence, and loading
 # ============================================================================
-# Manages DB_PASSWORD and ODOO_ADMIN_PASSWD:
+# Manages DB_PASSWORD, ODOO_ADMIN_PASSWD, and browser-login bootstrap secrets:
 #   - Generates cryptographically secure random secrets
 #   - Persists to a chmod-600 secrets file
 #   - Validates file permissions before loading
@@ -61,6 +61,12 @@ load_persisted_secrets() {
   if [[ "${ORIGINAL_ODOO_ADMIN_PASSWD:-__unset__}" != "__unset__" ]]; then
     ODOO_ADMIN_PASSWD="$ORIGINAL_ODOO_ADMIN_PASSWD"
   fi
+  if [[ "${ORIGINAL_ODOO_WEB_LOGIN:-__unset__}" != "__unset__" ]]; then
+    ODOO_WEB_LOGIN="$ORIGINAL_ODOO_WEB_LOGIN"
+  fi
+  if [[ "${ORIGINAL_ODOO_WEB_LOGIN_PASSWORD:-__unset__}" != "__unset__" ]]; then
+    ODOO_WEB_LOGIN_PASSWORD="$ORIGINAL_ODOO_WEB_LOGIN_PASSWORD"
+  fi
 }
 
 # Write secrets to the persisted secrets file with secure permissions.
@@ -72,6 +78,12 @@ write_secrets_file() {
     printf "# Auto-generated secrets — do not commit to version control\n"
     printf "DB_PASSWORD=%q\n" "$DB_PASSWORD"
     printf "ODOO_ADMIN_PASSWD=%q\n" "$ODOO_ADMIN_PASSWD"
+    if [[ -n "${ODOO_WEB_LOGIN:-}" ]]; then
+      printf "ODOO_WEB_LOGIN=%q\n" "$ODOO_WEB_LOGIN"
+    fi
+    if [[ -n "${ODOO_WEB_LOGIN_PASSWORD:-}" ]]; then
+      printf "ODOO_WEB_LOGIN_PASSWORD=%q\n" "$ODOO_WEB_LOGIN_PASSWORD"
+    fi
   } >"$tmp"
   mv "$tmp" "$SECRETS_ENV_FILE"
   chmod 600 "$SECRETS_ENV_FILE"
@@ -95,6 +107,15 @@ ensure_secrets() {
     log_info "generated ODOO_ADMIN_PASSWD and stored it in $SECRETS_ENV_FILE"
   elif (( ${#ODOO_ADMIN_PASSWD} < MIN_SECRET_LENGTH )); then
     log_warn "ODOO_ADMIN_PASSWD is shorter than $MIN_SECRET_LENGTH characters — consider using a stronger password"
+  fi
+
+  if [[ "${ODOO_WEB_LOGIN_RESET:-1}" == "1" ]]; then
+    if [[ -z "${ODOO_WEB_LOGIN_PASSWORD:-}" ]]; then
+      ODOO_WEB_LOGIN_PASSWORD="$(random_secret)"
+      log_info "generated ODOO_WEB_LOGIN_PASSWORD and stored it in $SECRETS_ENV_FILE"
+    elif (( ${#ODOO_WEB_LOGIN_PASSWORD} < MIN_SECRET_LENGTH )); then
+      log_warn "ODOO_WEB_LOGIN_PASSWORD is shorter than $MIN_SECRET_LENGTH characters — consider using a stronger password"
+    fi
   fi
 
   write_secrets_file

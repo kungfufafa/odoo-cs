@@ -63,6 +63,14 @@ teardown() {
   grep -q "ODOO_ADMIN_PASSWD" "$SECRETS_ENV_FILE"
 }
 
+@test "write_secrets_file persists browser login secrets when present" {
+  export ODOO_WEB_LOGIN="admin"
+  export ODOO_WEB_LOGIN_PASSWORD="browser_secret_789"
+  write_secrets_file
+  grep -q "^ODOO_WEB_LOGIN=admin$" "$SECRETS_ENV_FILE"
+  grep -q "^ODOO_WEB_LOGIN_PASSWORD=browser_secret_789$" "$SECRETS_ENV_FILE"
+}
+
 # --- ensure_secrets ---------------------------------------------------------
 
 @test "ensure_secrets generates password if empty" {
@@ -73,6 +81,7 @@ teardown() {
   ensure_secrets
   [ -n "$DB_PASSWORD" ]
   [ -n "$ODOO_ADMIN_PASSWD" ]
+  [ -n "$ODOO_WEB_LOGIN_PASSWORD" ]
 }
 
 @test "ensure_secrets preserves existing password" {
@@ -99,12 +108,18 @@ teardown() {
 @test "load_persisted_secrets loads from file" {
   printf "DB_PASSWORD=%q\n" "loaded_password" > "$SECRETS_ENV_FILE"
   printf "ODOO_ADMIN_PASSWD=%q\n" "loaded_admin" >> "$SECRETS_ENV_FILE"
+  printf "ODOO_WEB_LOGIN=%q\n" "admin" >> "$SECRETS_ENV_FILE"
+  printf "ODOO_WEB_LOGIN_PASSWORD=%q\n" "loaded_browser" >> "$SECRETS_ENV_FILE"
   chmod 600 "$SECRETS_ENV_FILE"
   export ORIGINAL_DB_PASSWORD="__unset__"
   export ORIGINAL_ODOO_ADMIN_PASSWD="__unset__"
+  export ORIGINAL_ODOO_WEB_LOGIN="__unset__"
+  export ORIGINAL_ODOO_WEB_LOGIN_PASSWORD="__unset__"
   load_persisted_secrets
   [ "$DB_PASSWORD" = "loaded_password" ]
   [ "$ODOO_ADMIN_PASSWD" = "loaded_admin" ]
+  [ "$ODOO_WEB_LOGIN" = "admin" ]
+  [ "$ODOO_WEB_LOGIN_PASSWORD" = "loaded_browser" ]
 }
 
 @test "load_persisted_secrets env override takes precedence" {

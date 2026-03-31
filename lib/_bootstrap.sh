@@ -114,3 +114,9 @@ cleanup_bootstrap_state() {
 set_bootstrap_exit_trap() {
   trap 'cleanup_bootstrap_state; release_lock' EXIT INT TERM
 }
+
+# Load post-restore hook
+if [[ -f "$LIB_DIR/post_restore_hook.sh" ]]; then
+  # shellcheck source=lib/post_restore_hook.sh
+  source "$LIB_DIR/post_restore_hook.sh"
+fi

@@ -83,3 +83,45 @@ PY
 
   [ "$result" = "$ROOT/db-backup.zip" ]
 }
+
+@test "restore_payload_into_database fails when plain SQL restore exits non-zero" {
+  export PATH="$MOCK_BIN:$PATH"
+  cat >"$MOCK_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+printf 'psql:dump.sql:1: ERROR: restore failed\n' >&2
+exit 3
+EOF
+  chmod +x "$MOCK_BIN/psql"
+  touch "$ROOT/dump.sql"
+
+  run restore_payload_into_database plain "$ROOT/dump.sql" "$DB_NAME"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"plain SQL restore failed"* ]]
+}
+
+@test "restore_payload_into_database uses strict pg_restore flags" {
+  export PATH="$MOCK_BIN:$PATH"
+  cat >"$MOCK_BIN/pg_restore" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$ROOT/pg_restore_args.txt"
+EOF
+  chmod +x "$MOCK_BIN/pg_restore"
+  touch "$ROOT/backup.dump"
+
+  _validate_core_tables_after_restore() {
+    return 0
+  }
+
+  run restore_payload_into_database custom "$ROOT/backup.dump" "$DB_NAME"
+
+  [ "$status" -eq 0 ]
+  grep -q -- '--no-privileges' "$ROOT/pg_restore_args.txt"
+  grep -q -- '--exit-on-error' "$ROOT/pg_restore_args.txt"
+}
+
+@test "restore module avoids bash-4-only associative arrays" {
+  run grep -n 'declare -A' "$PROJECT_ROOT/lib/restore.sh"
+
+  [ "$status" -ne 0 ]
+}

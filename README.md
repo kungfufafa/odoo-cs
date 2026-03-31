@@ -51,6 +51,22 @@ chmod +x setup_odoo.sh
 ./setup_odoo.sh start
 ```
 
+Untuk mode satu perintah yang langsung download lalu bootstrap:
+
+```bash
+chmod +x setup_odoo.sh
+./setup_odoo.sh fetch-start 'URL_FOLDER_GDRIVE'
+```
+
+Mode `fetch-start` akan otomatis membuka Odoo ke `0.0.0.0:8069` bila `ODOO_HTTP_INTERFACE` belum diisi, sehingga setelah bootstrap selesai Anda bisa langsung akses lewat IP server.
+Selain itu, script akan memilih satu user Odoo aktif, mereset password browser-nya ke secret bootstrap, lalu menuliskannya ke `.odoo.secrets.env` agar user bisa langsung login ke `/web/login` tanpa menebak kredensial hasil restore.
+
+Jika Anda ingin mengubah bind host secara eksplisit:
+
+```bash
+ODOO_HTTP_INTERFACE=10.20.30.40 ./setup_odoo.sh fetch-start 'URL_FOLDER_GDRIVE'
+```
+
 ### B. Alur Cepat (Artefak Sudah Tersedia Secara Lokal)
 Jika paket instalasi Odoo (`.deb`/`.tar.gz`/`.exe`), file custom addons, dan backup file database sudah ada sejajar dengan script ini.
 
@@ -67,7 +83,7 @@ chmod +x setup_odoo.sh
 
 Script akan otomatis: mendeteksi OS, mendeteksi & ekstrak addons/backup database, men-setup PostgreSQL (`role` & `database`), melakukan _restore_, membuat file `odoo.conf`, dan menyalakan proses Odoo secara otomatis.
 
-> 📝 **Catatan:** Setelah berhasil, Odoo dapat diakses pada `http://127.0.0.1:8069`. File rahasia seperti konfigurasi password *master* akan digenerate otomatis ke file `.odoo.secrets.env` (Linux/Mac) atau `.odoo.secrets.ps1` (Windows).
+> 📝 **Catatan:** Command `start`/`bootstrap` default-nya tetap bind ke `127.0.0.1:8069`. Khusus `fetch-start`, script otomatis expose ke jaringan agar bisa langsung diakses lewat IP server. File rahasia seperti konfigurasi password *master* dan password login browser akan digenerate otomatis ke file `.odoo.secrets.env` (Linux/Mac) atau `.odoo.secrets.ps1` (Windows).
 
 ---
 
@@ -86,7 +102,7 @@ Setelah Odoo berhasil berjalan, Anda bisa menggunakan perintah-perintah *shortcu
 
 ## ⚙ Variabel Lingkungan (Environment Overrides)
 
-Perilaku script sangat dinamis dan bisa diatur sepenuhnya melalui *Environment Variables*. 
+Perilaku script sangat dinamis dan bisa diatur sepenuhnya melalui *Environment Variables*. Script juga membaca file `.env` di root proyek bila tersedia; environment variable dari shell tetap menang atas nilai di `.env`.
 Contoh memaksa nama database khusus dan file backup spesifik di Linux:
 ```bash
 DB_NAME=perusahaan_db BACKUP_INPUT="$PWD/backup-kemarin.zip" ./setup_odoo.sh start
@@ -95,8 +111,13 @@ DB_NAME=perusahaan_db BACKUP_INPUT="$PWD/backup-kemarin.zip" ./setup_odoo.sh sta
 **Variabel Penting yang Sering Digunakan:**
 - `DB_NAME` (Default: `mkli_local`): Menentukan nama database PostgreSQL.
 - `ODOO_HTTP_PORT` (Default: `8069`): Port HTTP untuk aplikasi Odoo.
+- `ODOO_EXPOSE_HTTP` (Default: `0`): Jika `1` dan `ODOO_HTTP_INTERFACE` tidak diisi, Odoo bind ke `0.0.0.0`.
+- `ODOO_WEB_LOGIN` (Default: auto): Login user Odoo yang akan dipilih/reset agar browser langsung bisa masuk.
+- `ODOO_WEB_LOGIN_PASSWORD` (Default: auto): Password login browser yang dipersist ke `.odoo.secrets.env`.
+- `ODOO_WEB_LOGIN_RESET` (Default: `1`): Jika `1`, password user browser-ready akan direset ke secret bootstrap.
 - `BACKUP_INPUT` (Default: auto): Menggunakan spesifik file arsip database tertentu untuk proses restore.
 - `RESTORE_MODE` (`required`, `auto`, `skip`): Menentukan seberapa wajib proses _restore_ ini diberlakukan.
+- `FETCH_START_REQUIRE_ODOO`, `FETCH_START_REQUIRE_BACKUP`, `FETCH_START_REQUIRE_ADDONS` (Default: `1`): Fail-fast bila folder Google Drive tidak berisi artefak minimum agar hasil akhir benar-benar siap dipakai.
 - `CUSTOM_ADDONS_ZIP_PATTERNS` (Default: `*addons*.zip`): Pola nama file regex untuk custom plugins Odoo.
 - `ODOO_WORKERS` (Default: auto): Men-setting auto-tuning jumlah *worker* otomatis berdasar Core CPU & RAM.
 - `ODOO_RUNTIME_AUTO_REPAIR` (Default: `1`): Menentukan apakah runtime preflight boleh memperbaiki dependency Python yang hilang sebelum Odoo dijalankan.

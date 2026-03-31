@@ -224,5 +224,14 @@ check_memory_hint() {
 # Output: full path on stdout (empty if not found)
 pick_file() {
   local pattern="$1"
-  find "$ROOT" -maxdepth 1 -type f -name "$pattern" | sort | head -n 1 || true
+  find "$ROOT" \
+    \( -path "$RESTORE_WORKDIR" -o -path "$RESTORE_WORKDIR/*" \
+       -o -path "$ARTIFACTS_DIR" -o -path "$ARTIFACTS_DIR/*" \
+       -o -path "$ROOT/.logs" -o -path "$ROOT/.logs/*" \
+       -o -path "$ROOT/.run" -o -path "$ROOT/.run/*" \
+       -o -path "$ROOT/.rollback" -o -path "$ROOT/.rollback/*" \
+       -o -path "$ROOT/.local" -o -path "$ROOT/.local/*" \
+       -o -path "$ROOT/.venv" -o -path "$ROOT/.venv/*" \
+       -o -path "$ROOT/.git" -o -path "$ROOT/.git/*" \) -prune -o \
+    -type f -name "$pattern" -print | sort | head -n 1 || true
 }

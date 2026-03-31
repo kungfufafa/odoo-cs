@@ -21,6 +21,52 @@ $ScriptVersion = if (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCo
 # --- CLI parsing -------------------------------------------------------------
 $Root = if ($env:ROOT) { $env:ROOT } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $Command = if ($args.Count -gt 0) { $args[0] } else { 'start' }
+$EnvFile = if ($env:ENV_FILE) { $env:ENV_FILE } else { Join-Path $Root '.env' }
+
+function Import-DotEnvFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    foreach ($rawLine in Get-Content -Path $Path -ErrorAction SilentlyContinue) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith('#')) {
+            continue
+        }
+
+        if ($line -like 'export *') {
+            $line = $line.Substring(6).TrimStart()
+        }
+
+        $parts = $line -split '=', 2
+        if ($parts.Count -ne 2) {
+            continue
+        }
+
+        $key = $parts[0].Trim()
+        $value = $parts[1].Trim()
+
+        if ($key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+            continue
+        }
+
+        if (-not (Test-Path "Env:$key")) {
+            if ($value.Length -ge 2) {
+                $firstChar = $value.Substring(0, 1)
+                $lastChar = $value.Substring($value.Length - 1, 1)
+                if ((($firstChar -eq "'") -or ($firstChar -eq '"')) -and ($lastChar -eq $firstChar)) {
+                    $value = $value.Substring(1, $value.Length - 2)
+                }
+            }
+
+            Set-Item -Path "Env:$key" -Value $value
+        }
+    }
+}
+
+Import-DotEnvFile -Path $EnvFile
 
 # --- Module Loader -----------------------------------------------------------
 $LibDir = Join-Path $Root 'lib'
@@ -28,6 +74,7 @@ if ((Test-Path $LibDir) -and (Test-Path (Join-Path $LibDir '_bootstrap.ps1'))) {
     # Load configuration
     $OriginalDbPassword = if (Test-Path Env:DB_PASSWORD) { $env:DB_PASSWORD } else { $null }
     $OriginalOdooAdminPasswd = if (Test-Path Env:ODOO_ADMIN_PASSWD) { $env:ODOO_ADMIN_PASSWD } else { $null }
+    $OriginalOdooHttpInterface = if (Test-Path Env:ODOO_HTTP_INTERFACE) { $env:ODOO_HTTP_INTERFACE } else { $null }
 
     $DbName = if ($env:DB_NAME) { $env:DB_NAME } else { 'mkli_local' }
     $DbUser = if ($env:DB_USER) { $env:DB_USER } else { 'odoo' }
@@ -42,6 +89,7 @@ if ((Test-Path $LibDir) -and (Test-Path (Join-Path $LibDir '_bootstrap.ps1'))) {
     $OdooHttpPort = if ($env:ODOO_HTTP_PORT) { $env:ODOO_HTTP_PORT } else { '8069' }
     $OdooGeventPort = if ($env:ODOO_GEVENT_PORT) { $env:ODOO_GEVENT_PORT } else { '8072' }
     $OdooHttpInterface = if ($env:ODOO_HTTP_INTERFACE) { $env:ODOO_HTTP_INTERFACE } else { '127.0.0.1' }
+    $OdooExposeHttp = if ($env:ODOO_EXPOSE_HTTP) { [int]$env:ODOO_EXPOSE_HTTP } else { 0 }
     $OdooProxyMode = if ($env:ODOO_PROXY_MODE) { [int]$env:ODOO_PROXY_MODE } else { 1 }
     $OdooListDb = if ($env:ODOO_LIST_DB) { [int]$env:ODOO_LIST_DB } else { 0 }
     $OdooWorkers = if ($env:ODOO_WORKERS) { $env:ODOO_WORKERS } else { 'auto' }
@@ -67,6 +115,8 @@ if ((Test-Path $LibDir) -and (Test-Path (Join-Path $LibDir '_bootstrap.ps1'))) {
     $SecretsFile = Join-Path $Root '.odoo.secrets.ps1'
     $ConfigFile = Join-Path $Root 'odoo.conf'
     $LogFile = if ($env:LOG_FILE) { $env:LOG_FILE } else { Join-Path $Root 'odoo.log' }
+    $DriveDownloadDir = if ($env:DOWNLOAD_DIR) { $env:DOWNLOAD_DIR } else { Join-Path $Root '.downloads\drive-folder' }
+    $DriveFetchVenvDir = if ($env:DRIVE_FETCH_VENV_DIR) { $env:DRIVE_FETCH_VENV_DIR } else { Join-Path $Root '.venv-drive-fetch' }
     $StartAfterRestore = if ($env:START_AFTER_RESTORE) { [int]$env:START_AFTER_RESTORE } else { 1 }
     $RestoreMode = if ($env:RESTORE_MODE) { $env:RESTORE_MODE } else { 'required' }
     $RestoreStrategy = if ($env:RESTORE_STRATEGY) { $env:RESTORE_STRATEGY } else { 'refresh' }
@@ -81,6 +131,10 @@ if ((Test-Path $LibDir) -and (Test-Path (Join-Path $LibDir '_bootstrap.ps1'))) {
     $HealthcheckTimeout = if ($env:HEALTHCHECK_TIMEOUT) { [int]$env:HEALTHCHECK_TIMEOUT } else { 120 }
     $StopTimeout = if ($env:STOP_TIMEOUT) { [int]$env:STOP_TIMEOUT } else { 30 }
     $DbConnectRetries = if ($env:DB_CONNECT_RETRIES) { [int]$env:DB_CONNECT_RETRIES } else { 3 }
+
+    if (($OdooExposeHttp -eq 1) -and (-not $OriginalOdooHttpInterface)) {
+        $OdooHttpInterface = '0.0.0.0'
+    }
 
     # Source all library modules
     . (Join-Path $LibDir 'logging.ps1')
@@ -107,12 +161,13 @@ if ((Test-Path $LibDir) -and (Test-Path (Join-Path $LibDir '_bootstrap.ps1'))) {
 function Show-Usage {
     @'
 Usage:
-  .\setup_odoo.ps1 start | bootstrap | foreground | run | status | logs | stop
+  .\setup_odoo.ps1 start | fetch-start <google_drive_folder_url> | bootstrap | foreground | run | status | logs | stop
   .\setup_odoo.ps1 --version
   .\setup_odoo.ps1 help
 
 Commands:
   start       Run bootstrap in background, then start Odoo detached.
+  fetch-start Download artifacts from Google Drive, then bootstrap and start Odoo.
   bootstrap   Run bootstrap once in the current shell and start Odoo detached.
   foreground  Run bootstrap once in the current shell and then start Odoo attached.
   run         Start Odoo immediately using the last generated runtime files.
@@ -129,9 +184,136 @@ Environment overrides:
   BACKUP_INPUT, RESTORE_MODE, RESTORE_STRATEGY, FILESTORE_STRATEGY
   CUSTOM_ADDONS_DIR, CUSTOM_ADDONS_ZIP_PATTERNS
   ODOO_EXE_PACKAGE, ODOO_HTTP_PORT, ODOO_GEVENT_PORT
+  ODOO_EXPOSE_HTTP=0|1
   ODOO_ADMIN_PASSWD, ODOO_PROXY_MODE, ODOO_LIST_DB, ODOO_WORKERS
   START_AFTER_RESTORE, MIN_FREE_GB, HEALTHCHECK_TIMEOUT, STOP_TIMEOUT
 '@ | Write-Host
+}
+
+function Get-PythonLauncher {
+    $py = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($py) {
+        return [PSCustomObject]@{
+            Executable = $py.Source
+            Prefix = @('-3')
+        }
+    }
+
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    if (-not $python) {
+        $python = Get-Command python -ErrorAction SilentlyContinue
+    }
+    if ($python) {
+        return [PSCustomObject]@{
+            Executable = $python.Source
+            Prefix = @()
+        }
+    }
+
+    return $null
+}
+
+function Get-GdownCommand {
+    $gdown = Get-Command gdown -ErrorAction SilentlyContinue
+    if ($gdown) { return $gdown.Source }
+
+    $venvGdown = Join-Path $DriveFetchVenvDir 'Scripts\gdown.exe'
+    if (Test-Path $venvGdown) { return $venvGdown }
+
+    $python = Get-PythonLauncher
+    if (-not $python) {
+        throw 'gdown tidak ditemukan dan Python 3 tidak tersedia untuk meng-install downloader Google Drive'
+    }
+
+    if (-not (Test-Path $DriveFetchVenvDir)) {
+        Write-Log "creating drive fetch virtualenv at $DriveFetchVenvDir"
+        & $python.Executable @($python.Prefix + @('-m', 'venv', $DriveFetchVenvDir))
+        if ($LASTEXITCODE -ne 0) { throw 'failed to create Python virtualenv for drive downloader' }
+    }
+
+    $venvPython = Join-Path $DriveFetchVenvDir 'Scripts\python.exe'
+    if (-not (Test-Path $venvPython)) {
+        throw "python virtualenv missing expected executable: $venvPython"
+    }
+
+    Write-Log "installing gdown into $DriveFetchVenvDir"
+    & $venvPython -m pip install --upgrade pip | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'failed to upgrade pip for drive downloader' }
+    & $venvPython -m pip install gdown | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'failed to install gdown for drive downloader' }
+
+    $venvGdown = Join-Path $DriveFetchVenvDir 'Scripts\gdown.exe'
+    if (-not (Test-Path $venvGdown)) {
+        throw "gdown executable not found after installation: $venvGdown"
+    }
+
+    return $venvGdown
+}
+
+function Copy-DriveDownloadsIntoRoot {
+    $normalizedDownloadDir = [IO.Path]::GetFullPath($DriveDownloadDir)
+    $prefix = $normalizedDownloadDir.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+
+    foreach ($file in Get-ChildItem -Path $DriveDownloadDir -Recurse -File -ErrorAction SilentlyContinue) {
+        if ($file.Name -like '*.part' -or $file.Name -like '*.part.*') {
+            continue
+        }
+
+        $sourcePath = [IO.Path]::GetFullPath($file.FullName)
+        if ($sourcePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $relativePath = $sourcePath.Substring($prefix.Length)
+        } else {
+            $relativePath = $file.Name
+        }
+
+        $destination = Join-Path $Root $relativePath
+        $destinationDir = Split-Path -Parent $destination
+        if ($destinationDir -and -not (Test-Path $destinationDir)) {
+            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+        }
+
+        Copy-Item -Force $file.FullName $destination
+    }
+}
+
+function Invoke-DriveFolderDownload {
+    param([string]$Url)
+
+    if (-not $Url) {
+        throw 'google drive folder url is required for fetch-start'
+    }
+
+    if (-not (Test-Path $DriveDownloadDir)) {
+        New-Item -ItemType Directory -Force -Path $DriveDownloadDir | Out-Null
+    }
+
+    $gdown = Get-GdownCommand
+    Write-Log "downloading Google Drive folder into $DriveDownloadDir"
+    & $gdown --folder --remaining-ok $Url -O $DriveDownloadDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "gdown failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Log "copying downloaded artifacts into $Root"
+    Copy-DriveDownloadsIntoRoot
+}
+
+function Enable-PublicHttpAccessIfUnset {
+    if (($OdooExposeHttp -eq 1) -and (-not $OriginalOdooHttpInterface)) {
+        $script:OdooHttpInterface = '0.0.0.0'
+    }
+}
+
+function Invoke-FetchStart {
+    param([string]$Url)
+
+    if (-not $OriginalOdooHttpInterface) {
+        Write-Log "Auto-hardening: fetch-start exposes Odoo on 0.0.0.0 (all network interfaces) so it can be accessed via IP directly."
+        $script:OdooExposeHttp = 1
+    }
+    Enable-PublicHttpAccessIfUnset
+    Invoke-DriveFolderDownload -Url $Url
+    Invoke-BootstrapDetached
 }
 
 # ============================================================================
@@ -140,6 +322,7 @@ Environment overrides:
 
 switch ($Command) {
     'start'     { Start-Background }
+    'fetch-start' { Invoke-FetchStart -Url $(if ($args.Count -gt 1) { $args[1] } else { $null }) }
     'bootstrap' { Invoke-BootstrapDetached }
     'foreground'{ Invoke-Foreground }
     'run'       { Invoke-Run }

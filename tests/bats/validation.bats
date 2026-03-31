@@ -222,6 +222,12 @@ teardown() {
   [ "$status" -eq 1 ]
 }
 
+@test "validate_all_inputs fails with invalid ODOO_EXPOSE_HTTP" {
+  export ODOO_EXPOSE_HTTP="2"
+  run validate_all_inputs
+  [ "$status" -eq 1 ]
+}
+
 @test "validate_all_inputs fails with invalid boolean" {
   export ODOO_PROXY_MODE="yes"
   run validate_all_inputs

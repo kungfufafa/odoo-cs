@@ -157,6 +157,7 @@ validate_all_inputs() {
   # Boolean validations
   validate_boolean "DB_ROLE_CAN_CREATEDB" "$DB_ROLE_CAN_CREATEDB" || (( errors++ ))
   validate_boolean "DB_ROLE_SUPERUSER" "$DB_ROLE_SUPERUSER" || (( errors++ ))
+  validate_boolean "ODOO_EXPOSE_HTTP" "$ODOO_EXPOSE_HTTP" || (( errors++ ))
   validate_boolean "ODOO_PROXY_MODE" "$ODOO_PROXY_MODE" || (( errors++ ))
   validate_boolean "ODOO_LIST_DB" "$ODOO_LIST_DB" || (( errors++ ))
   validate_boolean "START_AFTER_RESTORE" "$START_AFTER_RESTORE" || (( errors++ ))

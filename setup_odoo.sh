@@ -21,6 +21,9 @@
 set -Eeuo pipefail
 umask 077
 
+# Auto-chmod: ensure this script and helpers are executable
+[[ -x "${BASH_SOURCE[0]}" ]] || chmod +x "${BASH_SOURCE[0]}" 2>/dev/null || true
+
 # ============================================================================
 # Root directory and CLI argument parsing
 # ============================================================================
@@ -29,6 +32,102 @@ CMD="${1:-start}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
+ENV_FILE="${ENV_FILE:-$ROOT/.env}"
+
+trim_env_field() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+strip_env_inline_comment() {
+  local value="$1"
+  local result="" char prev_char="" i
+  local in_single=0
+  local in_double=0
+  local escaped=0
+
+  for (( i=0; i<${#value}; i++ )); do
+    char="${value:i:1}"
+
+    if (( escaped )); then
+      result+="$char"
+      prev_char="$char"
+      escaped=0
+      continue
+    fi
+
+    if (( in_double )) && [[ "$char" == "\\" ]]; then
+      result+="$char"
+      prev_char="$char"
+      escaped=1
+      continue
+    fi
+
+    if (( !in_double )) && [[ "$char" == "'" ]]; then
+      (( in_single = 1 - in_single ))
+      result+="$char"
+      prev_char="$char"
+      continue
+    fi
+
+    if (( !in_single )) && [[ "$char" == '"' ]]; then
+      (( in_double = 1 - in_double ))
+      result+="$char"
+      prev_char="$char"
+      continue
+    fi
+
+    if (( !in_single && !in_double )) && [[ "$char" == "#" ]]; then
+      if [[ -z "$result" || "$prev_char" =~ [[:space:]] ]]; then
+        break
+      fi
+    fi
+
+    result+="$char"
+    prev_char="$char"
+  done
+
+  trim_env_field "$result"
+}
+
+load_env_file() {
+  local env_file="$1"
+  local line key value quote_char
+
+  [[ -f "$env_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(trim_env_field "$line")"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="$(trim_env_field "${line#export}")"
+    fi
+
+    [[ "$line" == *=* ]] || continue
+
+    key="$(trim_env_field "${line%%=*}")"
+    value="$(trim_env_field "${line#*=}")"
+    value="$(strip_env_inline_comment "$value")"
+
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+    if [[ -z "${!key+x}" ]]; then
+      if (( ${#value} >= 2 )); then
+        quote_char="${value:0:1}"
+        if [[ "$quote_char" == "'" || "$quote_char" == '"' ]] && [[ "${value: -1}" == "$quote_char" ]]; then
+          value="${value:1:${#value}-2}"
+        fi
+      fi
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done <"$env_file"
+}
+
+load_env_file "$ENV_FILE"
 
 # ============================================================================
 # Load modular library (or show helpful error)
@@ -38,6 +137,9 @@ if [[ -d "$LIB_DIR" && -f "$LIB_DIR/_bootstrap.sh" ]]; then
   # Preserve original env var values before anything else overrides them
   ORIGINAL_DB_PASSWORD="${DB_PASSWORD-__unset__}"
   ORIGINAL_ODOO_ADMIN_PASSWD="${ODOO_ADMIN_PASSWD-__unset__}"
+  ORIGINAL_ODOO_WEB_LOGIN="${ODOO_WEB_LOGIN-__unset__}"
+  ORIGINAL_ODOO_WEB_LOGIN_PASSWORD="${ODOO_WEB_LOGIN_PASSWORD-__unset__}"
+  ORIGINAL_ODOO_HTTP_INTERFACE="${ODOO_HTTP_INTERFACE-__unset__}"
 
   # -- Default configuration values ------------------------------------------
   # These can all be overridden via environment variables.
@@ -58,9 +160,13 @@ if [[ -d "$LIB_DIR" && -f "$LIB_DIR/_bootstrap.sh" ]]; then
   DB_ROLE_SUPERUSER="${DB_ROLE_SUPERUSER:-0}"
   DB_PROVISION_METHOD="${DB_PROVISION_METHOD:-auto}"
   ODOO_ADMIN_PASSWD="${ODOO_ADMIN_PASSWD:-}"
+  ODOO_WEB_LOGIN="${ODOO_WEB_LOGIN:-}"
+  ODOO_WEB_LOGIN_PASSWORD="${ODOO_WEB_LOGIN_PASSWORD:-}"
+  ODOO_WEB_LOGIN_RESET="${ODOO_WEB_LOGIN_RESET:-1}"
   ODOO_HTTP_PORT="${ODOO_HTTP_PORT:-8069}"
   ODOO_GEVENT_PORT="${ODOO_GEVENT_PORT:-8072}"
   ODOO_HTTP_INTERFACE="${ODOO_HTTP_INTERFACE:-127.0.0.1}"
+  ODOO_EXPOSE_HTTP="${ODOO_EXPOSE_HTTP:-0}"
   ODOO_PROXY_MODE="${ODOO_PROXY_MODE:-1}"
   ODOO_LIST_DB="${ODOO_LIST_DB:-0}"
   ODOO_WORKERS="${ODOO_WORKERS:-auto}"
@@ -97,6 +203,23 @@ if [[ -d "$LIB_DIR" && -f "$LIB_DIR/_bootstrap.sh" ]]; then
   LINUX_DISTRO="${LINUX_DISTRO:-}"
   MIN_FREE_GB="${MIN_FREE_GB:-20}"
   HEALTHCHECK_TIMEOUT="${HEALTHCHECK_TIMEOUT:-120}"
+  FETCH_START_DOWNLOAD_RETRIES="${FETCH_START_DOWNLOAD_RETRIES:-3}"
+  FETCH_START_DOWNLOAD_RETRY_DELAY="${FETCH_START_DOWNLOAD_RETRY_DELAY:-10}"
+  FETCH_START_SKIP_DOWNLOAD="${FETCH_START_SKIP_DOWNLOAD:-0}"
+  FETCH_START_MIN_ARTIFACT_SIZE_KB="${FETCH_START_MIN_ARTIFACT_SIZE_KB:-100}"
+  FETCH_START_VALIDATE_URL="${FETCH_START_VALIDATE_URL:-1}"
+  FETCH_START_CHECK_PORT="${FETCH_START_CHECK_PORT:-1}"
+  FETCH_START_REQUIRE_ODOO="${FETCH_START_REQUIRE_ODOO:-1}"
+  FETCH_START_REQUIRE_BACKUP="${FETCH_START_REQUIRE_BACKUP:-1}"
+  FETCH_START_REQUIRE_ADDONS="${FETCH_START_REQUIRE_ADDONS:-1}"
+  FETCH_START_MIN_RAM_GB="${FETCH_START_MIN_RAM_GB:-2}"
+  FETCH_START_AUTO_INSTALL_MODULES="${FETCH_START_AUTO_INSTALL_MODULES:-1}"
+  FETCH_START_CLEAR_CACHE="${FETCH_START_CLEAR_CACHE:-0}"
+  FETCH_START_FORCE_REDOWNLOAD="${FETCH_START_FORCE_REDOWNLOAD:-0}"
+
+  if [[ "$ODOO_EXPOSE_HTTP" == "1" && "$ORIGINAL_ODOO_HTTP_INTERFACE" == "__unset__" ]]; then
+    ODOO_HTTP_INTERFACE="0.0.0.0"
+  fi
 
   # Source all library modules
   # shellcheck source=lib/_bootstrap.sh
@@ -114,6 +237,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ./setup_odoo.sh start
+  ./setup_odoo.sh fetch-start <google_drive_folder_url>
   ./setup_odoo.sh bootstrap
   ./setup_odoo.sh foreground
   ./setup_odoo.sh run [-d <db_name>]
@@ -125,6 +249,7 @@ Usage:
 
 Commands:
   start       Run bootstrap in background, then start Odoo detached.
+  fetch-start Download artifacts from a Google Drive folder, then bootstrap and start Odoo.
   bootstrap   Run bootstrap once in the current shell and start Odoo detached.
   foreground  Run bootstrap once in the current shell and then exec Odoo attached.
   run         Run Odoo immediately using the last generated runtime files.
@@ -149,11 +274,22 @@ Environment overrides:
   CUSTOM_ADDONS_DIR               CUSTOM_ADDONS_ZIP_PATTERNS
   ODOO_TAR_GZ, ODOO_DEB_PACKAGE, ODOO_EXE_PACKAGE
   ODOO_HTTP_PORT, ODOO_GEVENT_PORT, ODOO_HTTP_INTERFACE
-  ODOO_ADMIN_PASSWD               ODOO_PACKAGE_SHA256
+  ODOO_EXPOSE_HTTP=0|1
+  ODOO_ADMIN_PASSWD               ODOO_WEB_LOGIN
+  ODOO_WEB_LOGIN_PASSWORD         ODOO_WEB_LOGIN_RESET=0|1
+  ODOO_PACKAGE_SHA256
   ODOO_PROXY_MODE=0|1             ODOO_LIST_DB=0|1
   ODOO_WORKERS=<n>|auto
   START_AFTER_RESTORE=0|1
   MIN_FREE_GB                     HEALTHCHECK_TIMEOUT
+  FETCH_START_DOWNLOAD_RETRIES=3  FETCH_START_DOWNLOAD_RETRY_DELAY=10
+  FETCH_START_SKIP_DOWNLOAD=0|1   FETCH_START_MIN_ARTIFACT_SIZE_KB=100
+  FETCH_START_VALIDATE_URL=0|1    FETCH_START_CHECK_PORT=0|1
+  FETCH_START_REQUIRE_ODOO=0|1    FETCH_START_REQUIRE_BACKUP=0|1
+  FETCH_START_REQUIRE_ADDONS=0|1  FETCH_START_MIN_RAM_GB=2
+  FETCH_START_AUTO_INSTALL_MODULES=0|1  FETCH_START_CLEAR_CACHE=0|1
+  FETCH_START_FORCE_REDOWNLOAD=0|1
+  GDOWN_TIMEOUT=0
   LOG_LEVEL=DEBUG|INFO|WARN|ERROR LOG_FORMAT=text|json
   STOP_TIMEOUT=30
 EOF
@@ -261,11 +397,712 @@ foreground_bootstrap() {
 }
 
 # ============================================================================
+# Pre-flight System Check
+# ============================================================================
+
+# Comprehensive pre-flight check for fetch-start: OS, RAM, disk, ports, toolchain.
+# Dies immediately with a specific error message if any check fails.
+preflight_system_check() {
+  local errors=0
+  local mem_gb
+
+  log_info "═══ PRE-FLIGHT SYSTEM CHECK ═══"
+
+  # 1. OS validation
+  log_info "  [1/7] OS detection..."
+  if [[ "$OS_FAMILY" != "linux" ]]; then
+    log_error "  [FAIL] fetch-start is designed for Linux (detected: $OS_FAMILY). Use setup_odoo.ps1 on Windows or follow manual install for macOS."
+    (( errors++ ))
+  else
+    log_info "  [OK]   OS: $OS_FAMILY / $LINUX_DISTRO"
+  fi
+
+  # 2. RAM check
+  log_info "  [2/7] RAM check..."
+  mem_gb="$(detect_memory_gb)"
+  if [[ "$mem_gb" =~ ^[0-9]+$ ]] && (( mem_gb > 0 )); then
+    if (( mem_gb < FETCH_START_MIN_RAM_GB )); then
+      log_error "  [FAIL] Insufficient RAM: ${mem_gb}GB detected, minimum ${FETCH_START_MIN_RAM_GB}GB required. Odoo will be unstable."
+      (( errors++ ))
+    else
+      log_info "  [OK]   RAM: ${mem_gb}GB (min: ${FETCH_START_MIN_RAM_GB}GB)"
+    fi
+  else
+    log_warn "  [WARN] Could not detect RAM — proceeding anyway"
+  fi
+
+  # 3. Disk space check
+  log_info "  [3/7] Disk space check..."
+  local available_gb
+  if command -v df >/dev/null 2>&1; then
+    available_gb="$(df -BG "$ROOT" 2>/dev/null | awk 'NR==2 {sub(/G$/,"",$4); print $4}' || echo "0")"
+    if [[ "$available_gb" =~ ^[0-9]+$ ]] && (( available_gb < MIN_FREE_GB )); then
+      log_error "  [FAIL] Insufficient disk space: ${available_gb}GB free, minimum ${MIN_FREE_GB}GB required"
+      (( errors++ ))
+    else
+      log_info "  [OK]   Disk: ${available_gb}GB free (min: ${MIN_FREE_GB}GB)"
+    fi
+  fi
+
+  # 4. Port availability check (8069 and 5432)
+  log_info "  [4/7] Port availability check..."
+  if [[ "$FETCH_START_CHECK_PORT" != "1" ]]; then
+    log_info "  [INFO] HTTP port availability check skipped (FETCH_START_CHECK_PORT=$FETCH_START_CHECK_PORT)"
+  elif has_existing_fetch_start_deployment; then
+    log_info "  [INFO] Existing deployment detected — skipping HTTP port availability check for idempotent rerun"
+  elif ! _check_port_available "$ODOO_HTTP_PORT"; then
+    log_error "  [FAIL] Port $ODOO_HTTP_PORT is already in use — stop the conflicting service or set ODOO_HTTP_PORT to another value"
+    (( errors++ ))
+  else
+    log_info "  [OK]   Port $ODOO_HTTP_PORT (HTTP) is available"
+  fi
+  if ! _check_port_available 5432; then
+    log_warn "  [WARN] Port 5432 (PostgreSQL) is in use — PostgreSQL may already be installed"
+  else
+    log_info "  [OK]   Port 5432 (PostgreSQL) is available"
+  fi
+
+  # 5. Dependency toolchain check
+  log_info "  [5/7] Dependency toolchain check..."
+  local missing_tools=()
+  for cmd in git curl python3 pip3; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing_tools+=("$cmd")
+    fi
+  done
+
+  # Check gdown (can be auto-installed, so just warn)
+  if ! command -v gdown >/dev/null 2>&1; then
+    log_info "  [INFO] gdown not found globally — will be auto-installed into venv"
+  fi
+
+  if (( ${#missing_tools[@]} > 0 )); then
+    log_error "  [FAIL] Missing required tools: ${missing_tools[*]}"
+    (( errors++ ))
+  else
+    log_info "  [OK]   Toolchain: git, curl, python3, pip3 all available"
+  fi
+
+  # 6. PostgreSQL client check
+  log_info "  [6/7] PostgreSQL client check..."
+  if ! command -v psql >/dev/null 2>&1; then
+    log_warn "  [WARN] psql not found — will be installed as part of system packages"
+  else
+    log_info "  [OK]   psql is available"
+  fi
+
+  # 7. Network connectivity check
+  log_info "  [7/7] Network connectivity check..."
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 10 --connect-timeout 5 "https://drive.google.com" >/dev/null 2>&1; then
+      log_info "  [OK]   Google Drive is reachable"
+    else
+      log_warn "  [WARN] Cannot reach drive.google.com — check your internet connection"
+    fi
+  fi
+
+  if (( errors > 0 )); then
+    log_error "═══ PRE-FLIGHT FAILED: $errors error(s) found — fix the issues above and retry ═══"
+    return 1
+  fi
+
+  log_info "═══ PRE-FLIGHT PASSED: All checks OK ═══"
+  return 0
+}
+
+# Validate that a URL is a Google Drive folder URL.
+# Supports both direct folder URLs and URLs with usp=sharing parameter.
+# Arguments: $1=url
+# Returns 0 if valid, 1 otherwise.
+_validate_gdrive_url() {
+  local url="$1"
+  # Match: https://drive.google.com/drive/folders/<ID>
+  # Also match with query parameters like ?usp=sharing
+  [[ "$url" =~ ^https://drive\.google\.com/drive/folders/[A-Za-z0-9_-]+ ]]
+}
+
+# Check that the Odoo HTTP port is not already in use.
+# Returns 0 if port is free, 1 if occupied.
+_check_port_available() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -tlnp 2>/dev/null | grep -q ":${port} " && return 1
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -tlnp 2>/dev/null | grep -q ":${port} " && return 1
+  fi
+  return 0
+}
+
+# Search for user-provided artifacts while excluding generated workspace paths.
+# Arguments: $1=maxdepth, remaining args=additional find predicates
+_find_fetch_start_files() {
+  local maxdepth="$1"
+  shift
+
+  find "$ROOT" -maxdepth "$maxdepth" \
+    \( -path "$RESTORE_WORKDIR" -o -path "$RESTORE_WORKDIR/*" \
+       -o -path "$ARTIFACTS_DIR" -o -path "$ARTIFACTS_DIR/*" \
+       -o -path "$ROOT/.logs" -o -path "$ROOT/.logs/*" \
+       -o -path "$ROOT/.run" -o -path "$ROOT/.run/*" \
+       -o -path "$ROOT/.rollback" -o -path "$ROOT/.rollback/*" \
+       -o -path "$ROOT/.local" -o -path "$ROOT/.local/*" \
+       -o -path "$ROOT/.venv" -o -path "$ROOT/.venv/*" \
+       -o -path "$ROOT/.downloads" -o -path "$ROOT/.downloads/*" \
+       -o -path "$ROOT/.git" -o -path "$ROOT/.git/*" \) -prune -o \
+    "$@" -print
+}
+
+_artifact_size_kb() {
+  local file="$1"
+  printf '%s\n' "$(( ($(stat -f '%z' "$file" 2>/dev/null || stat -c '%s' "$file" 2>/dev/null || echo 0)) / 1024 ))"
+}
+
+count_fetch_start_artifacts() {
+  find "$ROOT" -maxdepth 2 -type f \
+    \( -name 'odoo*.tar.gz' -o -name 'odoo*.deb' -o -name 'dump.sql' -o -name '*.dump' -o -name '*.backup' \) \
+    ! -path "$ARTIFACTS_DIR/*" \
+    ! -path "$ROOT/.venv*" \
+    ! -path "$ROOT/.git/*" \
+    ! -path "$ROOT/.downloads/*" 2>/dev/null | wc -l | tr -d ' '
+}
+
+has_existing_fetch_start_deployment() {
+  local existing_count
+
+  [[ "$FETCH_START_FORCE_REDOWNLOAD" != "1" ]] || return 1
+  [[ -f "$ROOT/odoo.conf" && -f "$SECRETS_ENV_FILE" ]] || return 1
+
+  existing_count="$(count_fetch_start_artifacts)"
+  [[ "$existing_count" =~ ^[0-9]+$ ]] || return 1
+  (( existing_count >= 3 ))
+}
+
+_first_zip_matching_entries() {
+  local maxdepth="$1"
+  local entry_pattern="$2"
+  local archive
+
+  while IFS= read -r archive; do
+    if zip_list_entries "$archive" 2>/dev/null | grep -Eq "$entry_pattern"; then
+      printf '%s\n' "$archive"
+      return 0
+    fi
+  done < <(_find_fetch_start_files "$maxdepth" -type f -name '*.zip' | sort)
+
+  return 1
+}
+
+# Validate downloaded artifacts: check that expected files exist, are not empty,
+# and have the correct file extensions. Verifies manifest validity for addons.
+_validate_downloaded_artifacts() {
+  local min_kb="$FETCH_START_MIN_ARTIFACT_SIZE_KB"
+  local found_odoo=0 found_backup=0 found_addons=0 file_size_kb
+  local odoo_artifact backup_file backup_zip addons_manifest addons_zip
+  local summary
+
+  log_info "═══ ARTIFACT INTEGRITY CHECK ═══"
+
+  odoo_artifact="$(_find_fetch_start_files 2 -type f \( -name 'odoo*.tar.gz' -o -name 'odoo*.deb' -o -name 'odoo*.exe' \) | sort | head -n 1 || true)"
+  if [[ -n "$odoo_artifact" ]]; then
+    file_size_kb="$(_artifact_size_kb "$odoo_artifact")"
+    if (( file_size_kb < min_kb )); then
+      log_fatal "downloaded Odoo package is suspiciously small (${file_size_kb}KB < ${min_kb}KB minimum): $odoo_artifact — download may be corrupted"
+    fi
+    found_odoo=1
+    log_info "  [OK] Odoo package: $odoo_artifact (${file_size_kb}KB)"
+  fi
+
+  backup_file="$(_find_fetch_start_files 4 -type f \( -name 'dump.sql' -o -name '*.dump' -o -name '*.backup' -o -name '*.sql' \) | sort | head -n 1 || true)"
+  if [[ -n "$backup_file" ]]; then
+    file_size_kb="$(_artifact_size_kb "$backup_file")"
+    if (( file_size_kb < 1 )); then
+      log_fatal "downloaded database backup is empty: $backup_file — download may be corrupted"
+    fi
+    # Validate SQL dump content has recognizable statements
+    if [[ "$backup_file" == *.sql ]]; then
+      if ! head -c 4096 "$backup_file" 2>/dev/null | grep -qiE '(CREATE|COPY|SET|BEGIN|SELECT|ALTER|INSERT|DROP)'; then
+        log_warn "  [WARN] SQL dump does not contain recognizable SQL in header — may be wrong format"
+      else
+        log_info "  [OK] SQL dump content verified"
+      fi
+    fi
+    # Validate .dump PostgreSQL custom format magic bytes
+    if [[ "$backup_file" == *.dump ]]; then
+      local magic_bytes
+      magic_bytes="$(head -c 5 "$backup_file" 2>/dev/null || true)"
+      if [[ "$magic_bytes" != "PGDMP" ]]; then
+        log_warn "  [WARN] Custom dump missing PGDMP magic — may not be a valid PostgreSQL dump"
+      fi
+    fi
+    found_backup=1
+    log_info "  [OK] Database backup: $backup_file (${file_size_kb}KB)"
+  else
+    backup_zip="$(_first_zip_matching_entries 3 '(^|/)dump\.sql$|(^|/).+\.(dump|backup|sql)$' || true)"
+    if [[ -n "$backup_zip" ]]; then
+      file_size_kb="$(_artifact_size_kb "$backup_zip")"
+      if (( file_size_kb < 1 )); then
+        log_fatal "downloaded backup archive is empty: $backup_zip — download may be corrupted"
+      fi
+      found_backup=1
+      log_info "  [OK] Database backup archive: $backup_zip (${file_size_kb}KB)"
+    fi
+  fi
+
+  addons_manifest="$(_find_fetch_start_files 4 -type f -name '__manifest__.py' | sort | head -n 1 || true)"
+  if [[ -n "$addons_manifest" ]]; then
+    # Validate __manifest__.py is parseable Python with required 'name' key
+    if command -v python3 >/dev/null 2>&1; then
+      if python3 -c "
+import ast, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = ast.literal_eval(f.read())
+    if not isinstance(data, dict) or 'name' not in data:
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+" "$addons_manifest" 2>/dev/null; then
+        local module_dir
+        module_dir="$(basename "$(dirname "$addons_manifest")")"
+        log_info "  [OK] Addons manifest valid: $module_dir/__manifest__.py"
+      else
+        log_error "  [FAIL] __manifest__.py is not valid or missing 'name' key: $addons_manifest"
+      fi
+    else
+      log_info "  [OK] Custom addons directory: $(dirname "$addons_manifest")"
+    fi
+    found_addons=1
+  else
+    addons_zip="$(_first_zip_matching_entries 3 '(^|/)__manifest__\.py$' || true)"
+    if [[ -n "$addons_zip" ]]; then
+      file_size_kb="$(_artifact_size_kb "$addons_zip")"
+      if (( file_size_kb < min_kb )); then
+        log_fatal "downloaded addons archive is suspiciously small (${file_size_kb}KB < ${min_kb}KB minimum): $addons_zip — download may be corrupted"
+      fi
+      found_addons=1
+      log_info "  [OK] Addons archive: $addons_zip (${file_size_kb}KB)"
+    fi
+  fi
+
+  if (( found_odoo == 0 && found_backup == 0 && found_addons == 0 )); then
+    log_fatal "no usable artifacts found after download — check the Google Drive folder contents and URL"
+  fi
+  if [[ "$FETCH_START_REQUIRE_ODOO" == "1" && $found_odoo -eq 0 ]]; then
+    log_fatal "fetch-start requires an Odoo installer/source artifact, but none was found after download"
+  fi
+  if [[ "$FETCH_START_REQUIRE_BACKUP" == "1" && $found_backup -eq 0 ]]; then
+    log_fatal "fetch-start requires a database backup so restored data is available, but none was found after download"
+  fi
+  if [[ "$FETCH_START_REQUIRE_ADDONS" == "1" && $found_addons -eq 0 ]]; then
+    log_fatal "fetch-start requires custom addons so restored modules are visible, but none was found after download"
+  fi
+
+  summary="artifact validation: odoo=$found_odoo, backup=$found_backup, addons=$found_addons"
+  log_info "═══ INTEGRITY CHECK PASSED: $summary ═══"
+}
+
+# Download artifacts from Google Drive with retry logic and idempotency guard.
+# Arguments: $1=url
+download_drive_artifacts() {
+  local url="${1:-}"
+  [[ -n "$url" ]] || log_fatal "google drive folder url is required for fetch-start"
+  [[ -f "$ROOT/download_drive_folder.sh" ]] || log_fatal "download_drive_folder.sh not found at $ROOT"
+
+  # URL validation
+  if [[ "$FETCH_START_VALIDATE_URL" == "1" ]] && ! _validate_gdrive_url "$url"; then
+    log_fatal "invalid Google Drive folder URL: $url — expected format: https://drive.google.com/drive/folders/<ID>"
+  fi
+
+  # --- Idempotency guard: detect existing deployment ---
+  if [[ "$FETCH_START_FORCE_REDOWNLOAD" != "1" ]]; then
+    local existing_count
+    existing_count="$(count_fetch_start_artifacts)"
+    if [[ "$existing_count" =~ ^[0-9]+$ ]] && (( existing_count >= 3 )); then
+      log_info "═══ IDEMPOTENCY GUARD ═══"
+      log_info "Found $existing_count artifact(s) from a previous download"
+      if has_existing_fetch_start_deployment; then
+        log_info "Previous deployment detected (odoo.conf + secrets exist)"
+        log_info "  To force re-download: re-run with FETCH_START_FORCE_REDOWNLOAD=1"
+        log_info "  To clear cache and start fresh: re-run with FETCH_START_CLEAR_CACHE=1"
+        if [[ "$FETCH_START_SKIP_DOWNLOAD" == "1" ]]; then
+          log_info "  FETCH_START_SKIP_DOWNLOAD=1 — skipping download, validating existing artifacts"
+          _validate_downloaded_artifacts
+          return 0
+        fi
+        # Even without explicit skip, if we have a full deployment, ask before re-downloading
+        log_warn "Existing deployment detected — to re-download from scratch, set FETCH_START_FORCE_REDOWNLOAD=1"
+        log_info "Validating existing artifacts..."
+        _validate_downloaded_artifacts
+        return 0
+      fi
+      log_info "Partial artifacts found — proceeding with download to update"
+    fi
+  fi
+
+  # --- Clear cache if requested ---
+  if [[ "$FETCH_START_CLEAR_CACHE" == "1" ]]; then
+    log_info "FETCH_START_CLEAR_CACHE=1 — clearing cached downloads and extracted artifacts"
+    rm -rf "$ROOT/.downloads" 2>/dev/null || true
+    rm -rf "$ROOT/.artifacts" 2>/dev/null || true
+    # Remove previously downloaded root-level artifacts (not scripts/configs)
+    find "$ROOT" -maxdepth 2 -type f \( -name 'odoo*.tar.gz' -o -name 'dump.sql' -o -name '*.dump' -o -name '*.backup' -o -name '*addons*.zip' \) ! -name '*.sh' ! -name '*.conf' ! -name '*.env' -delete 2>/dev/null || true
+    log_info "Cache cleared"
+  fi
+
+  # --- Download with retry ---
+  local retries="$FETCH_START_DOWNLOAD_RETRIES"
+  local retry_delay="$FETCH_START_DOWNLOAD_RETRY_DELAY"
+  local attempt=1
+  local last_error=""
+
+  while (( attempt <= retries )); do
+    log_info "downloading Odoo artifacts from Google Drive (attempt $attempt/$retries)"
+    if bash "$ROOT/download_drive_folder.sh" run "$url"; then
+      log_info "download completed successfully on attempt $attempt"
+      _validate_downloaded_artifacts
+      return 0
+    fi
+
+    last_error="exit code $?"
+    # Detect common gdown errors for better messages
+    if [[ -f "$ROOT/.logs/drive-folder-download.log" ]]; then
+      local log_tail
+      log_tail="$(tail -c 500 "$ROOT/.logs/drive-folder-download.log" 2>/dev/null || true)"
+      if [[ "$log_tail" == *"quota"* ]] || [[ "$log_tail" == *"rate"* ]]; then
+        last_error="Google Drive quota/rate limit exceeded"
+      elif [[ "$log_tail" == *"cannot find"* ]] || [[ "$log_tail" == *"not found"* ]]; then
+        last_error="File/folder not found on Google Drive"
+      elif [[ "$log_tail" == *"permission"* ]] || [[ "$log_tail" == *"access"* ]]; then
+        last_error="Access denied — check folder sharing permissions"
+      fi
+    fi
+
+    if (( attempt == retries )); then
+      log_fatal "download failed after $retries attempts ($last_error) — check your internet connection, Google Drive URL, and folder sharing permissions"
+    fi
+
+    log_warn "download attempt $attempt/$retries failed ($last_error), retrying in ${retry_delay}s..."
+    sleep "$retry_delay"
+    (( attempt++ ))
+  done
+}
+
+# Print a production-ready success banner with all credentials and next steps.
+print_access_summary() {
+  local port="${ODOO_HTTP_PORT:-8069}"
+  local admin_pw="${ODOO_ADMIN_PASSWD:-}"
+  local web_login="${ODOO_WEB_LOGIN:-}"
+  local web_pw="${ODOO_WEB_LOGIN_PASSWORD:-}"
+  local ip_list ip_addr
+  local addons_count=0
+  local db_table_count=0
+  local db_user_count=0
+  local db_module_count=0
+
+  # Count custom addons
+  if [[ -n "${CUSTOM_ADDONS_DIR:-}" && -d "${CUSTOM_ADDONS_DIR:-}" ]]; then
+    addons_count="$(find "$CUSTOM_ADDONS_DIR" -maxdepth 2 -name '__manifest__.py' 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+
+  # Query database for record counts (post-deployment verification)
+  if command -v psql >/dev/null 2>&1; then
+    db_table_count="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ' || echo "0")"
+    db_user_count="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM res_users WHERE active IS TRUE;" 2>/dev/null | tr -d ' ' || echo "0")"
+    db_module_count="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM ir_module_module WHERE state='installed';" 2>/dev/null | tr -d ' ' || echo "0")"
+  fi
+
+  # Collect all non-loopback IPv4 addresses
+  ip_list=()
+  if command -v hostname >/dev/null 2>&1; then
+    while IFS= read -r ip_addr; do
+      [[ -n "$ip_addr" ]] && ip_list+=("$ip_addr")
+    done < <(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' || true)
+  fi
+  if command -v ip >/dev/null 2>&1 && (( ${#ip_list[@]} == 0 )); then
+    while IFS= read -r ip_addr; do
+      [[ -n "$ip_addr" ]] && ip_list+=("$ip_addr")
+    done < <(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)
+  fi
+  if command -v ifconfig >/dev/null 2>&1 && (( ${#ip_list[@]} == 0 )); then
+    while IFS= read -r ip_addr; do
+      [[ -n "$ip_addr" ]] && ip_list+=("$ip_addr")
+    done < <(ifconfig 2>/dev/null | grep 'inet ' | awk '{print $2}' | grep -v '127\.' || true)
+  fi
+
+  printf '\n' >&2
+  log_info "╔══════════════════════════════════════════════════════════════════╗"
+  log_info "║        ODOO DEPLOYMENT COMPLETE — PRODUCTION READY             ║"
+  log_info "╚══════════════════════════════════════════════════════════════════╝"
+  log_info ""
+  log_info "  Database        : $DB_NAME"
+  log_info "  DB Tables       : ${db_table_count} tables"
+  log_info "  Active Users    : ${db_user_count}"
+  log_info "  Installed Modules: ${db_module_count}"
+  log_info "  Custom Addons   : ${addons_count} module(s)"
+  log_info "  Port            : $port"
+  log_info "  Interface       : $ODOO_HTTP_INTERFACE"
+
+  if [[ -n "$admin_pw" ]]; then
+    log_info ""
+    log_info "  ┌──────────────────────────────────────────────────────────────┐"
+    log_info "  │  MASTER PASSWORD (admin_passwd):                             │"
+    log_info "  │  $admin_pw"
+    log_info "  │  (tersimpan di: $SECRETS_ENV_FILE)"
+    log_info "  └──────────────────────────────────────────────────────────────┘"
+  fi
+
+  if [[ -n "$web_login" || -n "$web_pw" ]]; then
+    log_info ""
+    log_info "  ┌──────────────────────────────────────────────────────────────┐"
+    log_info "  │  LOGIN ODOO SIAP PAKAI:                                      │"
+    if [[ -n "$web_login" ]]; then
+      log_info "  │  Username : $web_login"
+    else
+      log_info "  │  Username : (cek $SECRETS_ENV_FILE)"
+    fi
+    if [[ -n "$web_pw" ]]; then
+      log_info "  │  Password : $web_pw"
+    else
+      log_info "  │  Password : (mengikuti password user hasil restore)"
+    fi
+    log_info "  │  (tersimpan di: $SECRETS_ENV_FILE)"
+    log_info "  └──────────────────────────────────────────────────────────────┘"
+  fi
+
+  log_info ""
+  log_info "  ┌──────────────────────────────────────────────────────────────┐"
+  log_info "  │  LANGKAH PERTAMA:                                             │"
+  log_info "  │  1. Buka URL di bawah di browser                               │"
+  log_info "  │  2. Login dengan kredensial di atas                            │"
+  log_info "  │  3. Modul custom sudah terinstall — langsung pakai!           │"
+  log_info "  │  4. Data sample sudah tersedia dari backup                     │"
+  log_info "  └──────────────────────────────────────────────────────────────┘"
+
+  log_info ""
+  log_info "  URL Akses:"
+  if (( ${#ip_list[@]} > 0 )); then
+    for ip_addr in "${ip_list[@]}"; do
+      log_info "    http://${ip_addr}:${port}/web/login"
+    done
+  else
+    log_info "    http://localhost:${port}/web/login"
+  fi
+
+  log_info ""
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active odoo-cs >/dev/null 2>&1; then
+    log_info "  Systemd         : odoo-cs.service ACTIVE (auto-start saat reboot)"
+  fi
+
+  log_info ""
+  log_info "  Perintah berguna:"
+  log_info "    Stop Odoo      : ./setup_odoo.sh stop"
+  log_info "    Lihat log      : tail -f $LOG_FILE"
+  log_info "    Status         : ./setup_odoo.sh status"
+  log_info "    Lihat secret   : cat $SECRETS_ENV_FILE"
+  log_info "    Re-download    : FETCH_START_FORCE_REDOWNLOAD=1 ./setup_odoo.sh fetch-start '<URL>'"
+  log_info ""
+  log_info "════════════════════════════════════════════════════════════════════"
+}
+
+# Install basic system prerequisites for fetch-start on a fresh OS.
+# Ensures python3, curl, unzip, rsync are available.
+ensure_system_prerequisites() {
+  if [[ "$OS_FAMILY" != "linux" ]]; then
+    return 0
+  fi
+
+  local need_install=0
+  local pkgs_to_install=()
+
+  for cmd_pkg in "python3:python3" "curl:curl" "unzip:unzip" "rsync:rsync" "pip3:python3-pip" "lsof:lsof"; do
+    local cmd="${cmd_pkg%%:*}"
+    local pkg="${cmd_pkg##*:}"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      pkgs_to_install+=("$pkg")
+      need_install=1
+    fi
+  done
+
+  if (( need_install )); then
+    if [[ "$LINUX_DISTRO" == "ubuntu" || "$LINUX_DISTRO" == "debian" ]]; then
+      log_info "Installing prerequisites: ${pkgs_to_install[*]}"
+      run_privileged apt-get update -qq
+      run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs_to_install[@]}"
+    else
+      log_warn "Some prerequisites may be missing (${pkgs_to_install[*]}) — install them manually if the script fails"
+    fi
+  fi
+
+  log_info "System prerequisites OK"
+}
+
+# Post-deployment validation: verify database connectivity, table counts,
+# module detection, and HTTP healthcheck after Odoo is fully started.
+_post_deployment_validation() {
+  local errors=0
+
+  # 1. Verify database is reachable and has core tables
+  log_info "  [1/4] Verifying database connectivity..."
+  if command -v psql >/dev/null 2>&1; then
+    local db_result
+    db_result="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ' || echo "")"
+    if [[ "$db_result" =~ ^[0-9]+$ ]] && (( db_result > 0 )); then
+      log_info "  [OK]   Database reachable: $DB_NAME ($db_result tables)"
+    else
+      log_error "  [FAIL] Database $DB_NAME is not reachable or has 0 tables"
+      (( errors++ ))
+    fi
+
+    # Verify minimum core tables
+    local core_tables_count=0
+    local core_table
+    for core_table in ir_module_module res_users ir_config_parameter; do
+      local exists
+      exists="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='$core_table';" 2>/dev/null | tr -d ' ')"
+      if [[ "$exists" == "1" ]]; then
+        (( core_tables_count++ ))
+      fi
+    done
+    if (( core_tables_count >= 3 )); then
+      log_info "  [OK]   Core Odoo tables verified ($core_tables_count/3)"
+    else
+      log_error "  [FAIL] Missing core Odoo tables (only $core_tables_count/3 found)"
+      (( errors++ ))
+    fi
+  else
+    log_warn "  [WARN] psql not available — skipping database verification"
+  fi
+
+  # 2. Verify module detection
+  log_info "  [2/4] Verifying module detection..."
+  if command -v psql >/dev/null 2>&1; then
+    local installed_modules custom_installed=0
+    installed_modules="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM ir_module_module WHERE state='installed';" 2>/dev/null | tr -d ' ' || echo "0")"
+    custom_installed="$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atqc "SELECT COUNT(*) FROM ir_module_module WHERE state='installed' AND name NOT IN ('base','web','website','bus','mail','http','base_import','base_setup','web_tour','report','web_settings_dashboard');" 2>/dev/null | tr -d ' ' || echo "0")"
+    log_info "  [OK]   Modules: $installed_modules installed ($custom_installed custom)"
+  fi
+
+  # 3. Verify custom addons path
+  log_info "  [3/4] Verifying custom addons..."
+  if [[ -n "${CUSTOM_ADDONS_DIR:-}" && -d "${CUSTOM_ADDONS_DIR:-}" ]]; then
+    local manifest_count
+    manifest_count="$(find "$CUSTOM_ADDONS_DIR" -maxdepth 2 -name '__manifest__.py' 2>/dev/null | wc -l | tr -d ' ')"
+    log_info "  [OK]   Custom addons: $manifest_count module(s) in $CUSTOM_ADDONS_DIR"
+  else
+    log_warn "  [WARN] Custom addons directory not detected"
+  fi
+
+  # 4. HTTP healthcheck (already done in bootstrap_detached, but verify again)
+  log_info "  [4/4] Verifying HTTP endpoint..."
+  local hc_url
+  hc_url="$(healthcheck_url)"
+  if command -v curl >/dev/null 2>&1; then
+    local http_code
+    http_code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 --connect-timeout 5 "$hc_url" 2>/dev/null || echo "000")"
+    if [[ "$http_code" =~ ^(200|302|303|304)$ ]]; then
+      log_info "  [OK]   HTTP endpoint responding: $hc_url (HTTP $http_code)"
+    else
+      log_error "  [FAIL] HTTP endpoint not responding correctly: $hc_url (HTTP $http_code)"
+      (( errors++ ))
+    fi
+  fi
+
+  if (( errors > 0 )); then
+    log_warn "Post-deployment validation: $errors issue(s) detected — Odoo may not be fully functional"
+  else
+    log_info "═══ POST-DEPLOYMENT VALIDATION PASSED ═══"
+  fi
+}
+
+fetch_start() {
+  local url="${1:-}"
+
+  log_info "╔══════════════════════════════════════════════════════════════════╗"
+  log_info "║              ODOO FETCH-START — PRODUCTION DEPLOY               ║"
+  log_info "╚══════════════════════════════════════════════════════════════════╝"
+
+  # --- Production hardening: auto-expose on all interfaces ---
+  if [[ "$ODOO_EXPOSE_HTTP" != "1" && "$ORIGINAL_ODOO_HTTP_INTERFACE" == "__unset__" ]]; then
+    log_info "Auto-hardening: exposing Odoo on 0.0.0.0 (all network interfaces)"
+    export ODOO_EXPOSE_HTTP="1"
+    export ODOO_HTTP_INTERFACE="0.0.0.0"
+  fi
+
+  # --- Production hardening: force restore mode to required ---
+  if [[ "$RESTORE_MODE" == "auto" ]]; then
+    log_info "Auto-hardening: setting RESTORE_MODE=required for fetch-start"
+    export RESTORE_MODE="required"
+  fi
+
+  # --- Production hardening: extend healthcheck timeout for first boot ---
+  if (( HEALTHCHECK_TIMEOUT <= 300 )); then
+    log_info "Auto-hardening: extending HEALTHCHECK_TIMEOUT to 600s for first boot"
+    export HEALTHCHECK_TIMEOUT=600
+  fi
+
+  # --- Production hardening: lower MIN_FREE_GB requirement for fetch-start ---
+  if (( MIN_FREE_GB > 5 )); then
+    log_info "Auto-hardening: lowering MIN_FREE_GB from ${MIN_FREE_GB} to 5 for fetch-start"
+    export MIN_FREE_GB=5
+  fi
+
+  # --- Production hardening: security baseline ---
+  if [[ "$ODOO_LIST_DB" != "0" ]]; then
+    log_info "Auto-hardening: setting ODOO_LIST_DB=False (security: hide database list)"
+    export ODOO_LIST_DB="0"
+  fi
+  if [[ -z "$ODOO_DBFILTER" ]] || [[ "$ODOO_DBFILTER" == "^.*$" ]]; then
+    log_info "Auto-hardening: setting ODOO_DBFILTER=^${DB_NAME}$ (security: restrict to target DB)"
+    export ODOO_DBFILTER="^${DB_NAME}$"
+  fi
+
+  # --- Phase 0: Pre-flight system check (fail fast) ---
+  detect_platform
+  [[ "$OS_FAMILY" != "windows" ]] || log_fatal "use setup_odoo.ps1 on Windows"
+
+  preflight_system_check || log_fatal "pre-flight system check failed — fix the issues above and retry"
+
+  # --- Pre-flight: auto-chmod helper scripts ---
+  chmod +x "$ROOT/download_drive_folder.sh" 2>/dev/null || true
+
+  # --- Pre-flight: install system prerequisites on fresh OS ---
+  ensure_system_prerequisites
+
+  # --- Pre-flight: sudo authentication (prevents timeout during downloads) ---
+  if command -v sudo >/dev/null 2>&1 && ! is_root_user; then
+    log_info "Prompting for sudo password upfront to prevent timeout during long downloads..."
+    sudo -v || log_fatal "Sudo authentication failed. Required for PostgreSQL/Odoo installation."
+    ( while true; do sudo -n true; sleep 60; kill -0 $$ || exit 0; done 2>/dev/null & )
+  fi
+
+  # --- Phase 1: Download artifacts (with idempotency + retry) ---
+  log_info "═══ PHASE 1: DOWNLOAD ARTIFACTS ═══"
+  download_drive_artifacts "$url"
+
+  # --- Phase 2: Bootstrap and start ---
+  log_info "═══ PHASE 2: BOOTSTRAP & START ═══"
+  bootstrap_detached
+
+  # --- Phase 3: Post-deployment validation ---
+  log_info "═══ PHASE 3: POST-DEPLOYMENT VALIDATION ═══"
+  _post_deployment_validation
+
+  # --- Phase 4: Success summary ---
+  log_info "═══ PHASE 4: SUCCESS ═══"
+  print_access_summary
+}
+
+# ============================================================================
 # Command dispatcher
 # ============================================================================
 case "$CMD" in
   start)
     start_background
+    ;;
+  fetch-start)
+    fetch_start "$@"
     ;;
   bootstrap)
     bootstrap_detached "$@"

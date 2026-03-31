@@ -6,8 +6,7 @@ function Get-BackupInput {
         Select-Object -First 1
     if ($sqlDir) { return $sqlDir.Directory.FullName }
 
-    foreach ($zip in Get-ChildItem -Path $Root -Filter '*.zip' -File -ErrorAction SilentlyContinue |
-        Where-Object { -not (Test-IsInternalWorkspacePath $_.FullName) } |
+    foreach ($zip in Get-WorkspaceFilesRecursive -Path $Root -Filter '*.zip' -MaxDepth 2 |
         Sort-Object FullName) {
         try {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -18,8 +17,7 @@ function Get-BackupInput {
         } catch { }
     }
 
-    $candidate = Get-ChildItem -Path $Root -File -ErrorAction SilentlyContinue |
-        Where-Object { -not (Test-IsInternalWorkspacePath $_.FullName) } |
+    $candidate = Get-WorkspaceFilesRecursive -Path $Root -Filter '*' -MaxDepth 2 |
         Where-Object { $_.Extension -in @('.sql', '.dump', '.backup') } |
         Sort-Object FullName |
         Select-Object -First 1

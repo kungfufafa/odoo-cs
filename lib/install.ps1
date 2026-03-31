@@ -8,11 +8,8 @@ function Get-OdooExePackage {
 function Get-CustomAddonsZip {
     $patterns = $CustomAddonsZipPatterns -split '\|'
     foreach ($pattern in $patterns) {
-        $zip = Get-ChildItem -Path $Root -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like $pattern } |
-            Sort-Object FullName |
-            Select-Object -First 1
-        if ($zip) { return $zip.FullName }
+        $zip = Get-FirstFile $pattern
+        if ($zip) { return $zip }
     }
     return $null
 }
